@@ -42,20 +42,32 @@
 static const char *TAG = "cam_hal";
 static cam_obj_t *cam_obj = NULL;
 
-/* helper to throttle repeated warnings */
-#define CAM_WARN_THROTTLE(first) \
-    do { \
-        if ((warn_soi_miss_cnt) == 0) { \
-            ESP_DRAM_LOGW(TAG, first); \
-        } \
-        if (++(warn_soi_miss_cnt) % 100 == 0) { \
-            ESP_LOGW(TAG, "NO-SOI - 100 additional misses"); \
-        } \
-        if ((warn_soi_miss_cnt) >= 10000) { \
-            ESP_LOGW(TAG, "NO-SOI - counter reset at 10000"); \
-            (warn_soi_miss_cnt) = 0; \
-        } \
+/* At top of cam_hal.c – one switch for noisy ISR prints */
+#ifndef CAM_LOG_SPAM_EVERY_FRAME
+#define CAM_LOG_SPAM_EVERY_FRAME 0   /* set to 1 to restore old behaviour */
+#endif
+
+/* Throttle repeated warnings printed from tight loops / ISRs.
+ *
+ * counter  – static DRAM/IRAM uint16_t you pass in
+ * first    – literal C string shown on first hit
+ * every100 – literal C string shown for each 100-th hit
+ */
+#if CONFIG_LOG_DEFAULT_LEVEL >= 3
+#define CAM_WARN_THROTTLE(counter, first, every100)                  \
+    do {                                                             \
+        uint16_t n = ++(counter);                                    \
+        if (n == 1) {                                                \
+            ESP_CAMERA_ETS_PRINTF(DRAM_STR("cam_hal: %s\r\n"), first);   \
+        } else if ((n % 100) == 0) {                                 \
+            ESP_CAMERA_ETS_PRINTF(DRAM_STR("cam_hal: %s (x%u)\r\n"),      \
+                                 every100, (unsigned) n);             \
+        }                                                            \
+        if (n == 10000) (counter) = 0;                               \
     } while (0)
+#else
+#define CAM_WARN_THROTTLE(counter, first, every100) do { (void)(counter); } while (0)
+#endif
 
 /* JPEG markers in little-endian order (ESP32). */
 static const uint8_t JPEG_SOI_MARKER[] = {0xFF, 0xD8, 0xFF}; /* SOI = FF D8 FF */
@@ -67,7 +79,9 @@ static int cam_verify_jpeg_soi(const uint8_t *inbuf, uint32_t length)
     static uint16_t warn_soi_miss_cnt;
 
     if (length < soi_len) {
-        CAM_WARN_THROTTLE("NO-SOI - JPEG start marker missing (below 3 bytes in length)");
+        CAM_WARN_THROTTLE(warn_soi_miss_cnt,
+                          "NO-SOI - JPEG start marker missing (len < 3b)",
+                          "NO-SOI - JPEG start marker missing");
         return -1;
     }
 
@@ -78,7 +92,9 @@ static int cam_verify_jpeg_soi(const uint8_t *inbuf, uint32_t length)
         }
     }
 
-    CAM_WARN_THROTTLE("NO-SOI - JPEG start marker missing");
+    CAM_WARN_THROTTLE(warn_soi_miss_cnt,
+                      "NO-SOI - JPEG start marker missing",
+                      "NO-SOI - JPEG start marker missing");
     return -1;
 }
 
@@ -136,7 +152,14 @@ void IRAM_ATTR ll_cam_send_event(cam_obj_t *cam, cam_event_t cam_event, BaseType
     if (xQueueSendFromISR(cam->event_queue, (void *)&cam_event, HPTaskAwoken) != pdTRUE) {
         ll_cam_stop(cam);
         cam->state = CAM_STATE_IDLE;
-        ESP_CAMERA_ETS_PRINTF(DRAM_STR("cam_hal: EV-%s-OVF\r\n"), cam_event==CAM_IN_SUC_EOF_EVENT ? DRAM_STR("EOF") : DRAM_STR("VSYNC"));
+#if CAM_LOG_SPAM_EVERY_FRAME
+        ESP_DRAM_LOGD(TAG, "EV-%s-OVF", cam_event==CAM_IN_SUC_EOF_EVENT ? "EOF" : "VSYNC");
+#else
+        static uint16_t ovf_cnt;
+        CAM_WARN_THROTTLE(ovf_cnt,
+                          cam_event==CAM_IN_SUC_EOF_EVENT ? "EV-EOF-OVF" : "EV-VSYNC-OVF",
+                          cam_event==CAM_IN_SUC_EOF_EVENT ? "EV-EOF-OVF" : "EV-VSYNC-OVF");
+#endif
     }
 }
 
