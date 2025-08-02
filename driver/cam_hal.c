@@ -207,6 +207,9 @@ static bool cam_start_frame(int * frame_pos)
 
 void IRAM_ATTR ll_cam_send_event(cam_obj_t *cam, cam_event_t cam_event, BaseType_t * HPTaskAwoken)
 {
+    if (!cam->event_queue) {
+        return;
+    }
     if (xQueueSendFromISR(cam->event_queue, (void *)&cam_event, HPTaskAwoken) != pdTRUE) {
         ll_cam_stop(cam);
         cam->state = CAM_STATE_IDLE;
