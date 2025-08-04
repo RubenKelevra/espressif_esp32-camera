@@ -467,6 +467,7 @@ static esp_err_t cam_dma_config(const camera_config_t *config)
     cam_obj->dma_node_cnt = (cam_obj->dma_buffer_size) / cam_obj->dma_node_buffer_size; // Number of DMA nodes
     cam_obj->frame_copy_cnt = cam_obj->recv_size / cam_obj->dma_half_buffer_size; // Number of interrupted copies, ping-pong copy
     if (cam_obj->psram_mode) {
+        // Increment count because cam_task() checks after each copy, keeping frame size equal to the non-PSRAM path
         cam_obj->frame_copy_cnt++;
     }
 
@@ -487,7 +488,8 @@ static esp_err_t cam_dma_config(const camera_config_t *config)
         if (cam_obj->fb_size < cam_obj->recv_size) {
             fb_size = cam_obj->recv_size;
         }
-        fb_size += cam_obj->dma_half_buffer_size;
+        // One extra DMA node ensures the overflow guard in cam_task() can stop the engine
+        fb_size += cam_obj->dma_node_buffer_size;
     }
 
     /* Allocate memory for frame buffer */
@@ -518,6 +520,8 @@ static esp_err_t cam_dma_config(const camera_config_t *config)
             ESP_LOGI(TAG, "Frame[%d]: Offset: %u, Addr: 0x%08X", x, cam_obj->frames[x].fb_offset, (unsigned) cam_obj->frames[x].fb.buf);
             cam_obj->frames[x].dma = allocate_dma_descriptors(cam_obj->dma_node_cnt, cam_obj->dma_node_buffer_size, cam_obj->frames[x].fb.buf);
             CAM_CHECK(cam_obj->frames[x].dma != NULL, "frame dma malloc failed", ESP_FAIL);
+            cam_obj->frames[x].dma[cam_obj->dma_node_cnt - 1].empty = 0;
+            cam_obj->frames[x].dma[cam_obj->dma_node_cnt - 1].eof = 1;
         }
         cam_obj->frames[x].en = 1;
     }
