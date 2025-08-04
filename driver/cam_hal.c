@@ -20,6 +20,7 @@
 #include "freertos/task.h"
 #include "ll_cam.h"
 #include "cam_hal.h"
+#include "esp_camera.h"
 
 #if (ESP_IDF_VERSION_MAJOR == 3) && (ESP_IDF_VERSION_MINOR == 3)
 #include "rom/ets_sys.h"
@@ -738,9 +739,14 @@ camera_fb_t *cam_take(TickType_t timeout)
             if (warn_timeout_cnt++ == 0) {
                 ESP_CAMERA_ETS_PRINTF(DRAM_STR("cam_hal: frame timeout, restarting\r\n"));
             }
+            sensor_t *s = esp_camera_sensor_get();
             portENTER_CRITICAL(&g_cam_hal_lock);
             ll_cam_dma_reset(cam_obj);
+            if (s && s->reset) {
+                s->reset(s);
+            }
             portEXIT_CRITICAL(&g_cam_hal_lock);
+            vTaskDelay(10 / portTICK_PERIOD_MS);
             cam_start();
             return NULL;
         }
