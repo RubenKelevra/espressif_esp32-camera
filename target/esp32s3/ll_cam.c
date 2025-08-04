@@ -163,7 +163,10 @@ bool ll_cam_start(cam_obj_t *cam, int frame_pos)
     if (!cam->psram_mode) {
         GDMA.channel[cam->dma_num].in.link.addr = ((uint32_t)&cam->dma[0]) & 0xfffff;
     } else {
-        GDMA.channel[cam->dma_num].in.link.addr = ((uint32_t)&cam->frames[frame_pos].dma[0]) & 0xfffff;
+        lldesc_t *dma = cam->frames[frame_pos].dma;
+        dma[cam->dma_node_cnt - 1].empty = 0;
+        dma[cam->dma_node_cnt - 1].eof = 1;
+        GDMA.channel[cam->dma_num].in.link.addr = ((uint32_t)&dma[0]) & 0xfffff;
     }
 
     GDMA.channel[cam->dma_num].in.link.start = 1;

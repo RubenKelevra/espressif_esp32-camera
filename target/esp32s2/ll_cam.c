@@ -78,10 +78,7 @@ static void CAMERA_ISR_IRAM_ATTR ll_cam_dma_isr(void *arg)
 bool IRAM_ATTR ll_cam_stop(cam_obj_t *cam)
 {
     I2S0.conf.rx_start = 0;
-
-    if (cam->jpeg_mode || !cam->psram_mode) {
-        I2S_ISR_DISABLE(in_suc_eof);
-    }
+    I2S_ISR_DISABLE(in_suc_eof);
 
     I2S0.in_link.stop = 1;
     return true;
@@ -101,10 +98,8 @@ esp_err_t ll_cam_deinit(cam_obj_t *cam)
 bool ll_cam_start(cam_obj_t *cam, int frame_pos)
 {
     I2S0.conf.rx_start = 0;
-
-    if (cam->jpeg_mode || !cam->psram_mode) {
-        I2S_ISR_ENABLE(in_suc_eof);
-    }
+    // Always enable EOF interrupt so cam_task can stop runaway DMA
+    I2S_ISR_ENABLE(in_suc_eof);
 
     I2S0.conf.rx_reset = 1;
     I2S0.conf.rx_reset = 0;
@@ -121,7 +116,10 @@ bool ll_cam_start(cam_obj_t *cam, int frame_pos)
     if (!cam->psram_mode) {
         I2S0.in_link.addr = ((uint32_t)&cam->dma[0]) & 0xfffff;
     } else {
-        I2S0.in_link.addr = ((uint32_t)&cam->frames[frame_pos].dma[0]) & 0xfffff;
+        lldesc_t *dma = cam->frames[frame_pos].dma;
+        dma[cam->dma_node_cnt - 1].empty = 0;
+        dma[cam->dma_node_cnt - 1].eof = 1;
+        I2S0.in_link.addr = ((uint32_t)&dma[0]) & 0xfffff;
     }
 
     I2S0.in_link.start = 1;
