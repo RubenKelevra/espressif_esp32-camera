@@ -738,7 +738,9 @@ camera_fb_t *cam_take(TickType_t timeout)
             if (warn_timeout_cnt++ == 0) {
                 ESP_CAMERA_ETS_PRINTF(DRAM_STR("cam_hal: frame timeout, restarting\r\n"));
             }
+            portENTER_CRITICAL(&g_cam_hal_lock);
             ll_cam_dma_reset(cam_obj);
+            portEXIT_CRITICAL(&g_cam_hal_lock);
             cam_start();
             return NULL;
         }
