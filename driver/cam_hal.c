@@ -58,6 +58,7 @@ static cam_obj_t *cam_obj = NULL;
 
 static volatile bool g_psram_dma_mode = CAMERA_PSRAM_DMA_ENABLED;
 static portMUX_TYPE g_psram_dma_lock = portMUX_INITIALIZER_UNLOCKED;
+static portMUX_TYPE g_cam_hal_lock = portMUX_INITIALIZER_UNLOCKED;
 
 /* At top of cam_hal.c – one switch for noisy ISR prints */
 #ifndef CAM_LOG_SPAM_EVERY_FRAME
@@ -251,8 +252,10 @@ void IRAM_ATTR ll_cam_send_event(cam_obj_t *cam, cam_event_t cam_event, BaseType
 
     BaseType_t woken = pdFALSE;
     if (xQueueSendFromISR(cam->event_queue, &cam_event, &woken) != pdTRUE) {
+        portENTER_CRITICAL_ISR(&g_cam_hal_lock);
         ll_cam_stop(cam);
         cam->state = CAM_STATE_IDLE;
+        portEXIT_CRITICAL_ISR(&g_cam_hal_lock);
 #if CAM_LOG_SPAM_EVERY_FRAME
         ESP_DRAM_LOGD(TAG, "EV-%s-OVF", cam_event==CAM_IN_SUC_EOF_EVENT ? "EOF" : "VSYNC");
 #else
@@ -272,7 +275,9 @@ static void cam_task(void *arg)
 {
     int cnt = 0;
     int frame_pos = 0;
+    portENTER_CRITICAL(&g_cam_hal_lock);
     cam_obj->state = CAM_STATE_IDLE;
+    portEXIT_CRITICAL(&g_cam_hal_lock);
     cam_event_t cam_event = 0;
 
     xQueueReset(cam_obj->event_queue);
@@ -302,7 +307,9 @@ static void cam_task(void *arg)
                     if(!cam_obj->psram_mode){
                         if (cam_obj->fb_size < (frame_buffer_event->len + pixels_per_dma)) {
                             ESP_CAMERA_ETS_PRINTF(DRAM_STR("cam_hal: FB-OVF\r\n"));
+                            portENTER_CRITICAL(&g_cam_hal_lock);
                             ll_cam_stop(cam_obj);
+                            portEXIT_CRITICAL(&g_cam_hal_lock);
                             continue;
                         }
                         frame_buffer_event->len += ll_cam_memcpy(cam_obj,
@@ -317,8 +324,10 @@ static void cam_task(void *arg)
                         // cam event will be a VSYNC
                         if (cnt + 1 >= cam_obj->frame_copy_cnt) {
                             ESP_CAMERA_ETS_PRINTF(DRAM_STR("cam_hal: DMA overflow\r\n"));
+                            portENTER_CRITICAL(&g_cam_hal_lock);
                             ll_cam_stop(cam_obj);
                             cam_obj->state = CAM_STATE_IDLE;
+                            portEXIT_CRITICAL(&g_cam_hal_lock);
                             continue;
                         }
                     }
@@ -347,8 +356,10 @@ static void cam_task(void *arg)
                                     CAM_WARN_THROTTLE(warn_psram_soi_cnt,
                                                       "NO-SOI - JPEG start marker missing (PSRAM)");
                                 }
+                                portENTER_CRITICAL(&g_cam_hal_lock);
                                 ll_cam_stop(cam_obj);
                                 cam_obj->state = CAM_STATE_IDLE;
+                                portEXIT_CRITICAL(&g_cam_hal_lock);
                                 continue;
                             }
                         } else {
@@ -362,8 +373,10 @@ static void cam_task(void *arg)
                                     CAM_WARN_THROTTLE(warn_soi_bad_cnt,
                                                       "NO-SOI - JPEG start marker missing");
                                 }
+                                portENTER_CRITICAL(&g_cam_hal_lock);
                                 ll_cam_stop(cam_obj);
                                 cam_obj->state = CAM_STATE_IDLE;
+                                portEXIT_CRITICAL(&g_cam_hal_lock);
                                 continue;
                             }
                         }
@@ -373,7 +386,9 @@ static void cam_task(void *arg)
 
                 } else if (cam_event == CAM_VSYNC_EVENT) {
                     //DBG_PIN_SET(1);
+                    portENTER_CRITICAL(&g_cam_hal_lock);
                     ll_cam_stop(cam_obj);
+                    portEXIT_CRITICAL(&g_cam_hal_lock);
 
                     if (cnt || !cam_obj->jpeg_mode || cam_obj->psram_mode) {
                         if (cam_obj->jpeg_mode) {
@@ -426,7 +441,9 @@ static void cam_task(void *arg)
                     }
 
                     if(!cam_start_frame(&frame_pos)){
+                        portENTER_CRITICAL(&g_cam_hal_lock);
                         cam_obj->state = CAM_STATE_IDLE;
+                        portEXIT_CRITICAL(&g_cam_hal_lock);
                     } else {
                         cam_obj->frames[frame_pos].fb.len = 0;
                     }
@@ -685,13 +702,17 @@ esp_err_t cam_deinit(void)
 
 void cam_stop(void)
 {
+    portENTER_CRITICAL(&g_cam_hal_lock);
     ll_cam_vsync_intr_enable(cam_obj, false);
     ll_cam_stop(cam_obj);
+    portEXIT_CRITICAL(&g_cam_hal_lock);
 }
 
 void cam_start(void)
 {
+    portENTER_CRITICAL(&g_cam_hal_lock);
     ll_cam_vsync_intr_enable(cam_obj, true);
+    portEXIT_CRITICAL(&g_cam_hal_lock);
 }
 
 camera_fb_t *cam_take(TickType_t timeout)
@@ -732,7 +753,9 @@ camera_fb_t *cam_take(TickType_t timeout)
              * See esp32-camera commit 984999f (issue #620). */
 #if CONFIG_IDF_TARGET_ESP32S3
             if (dma_reset_counter < MAX_GDMA_RESETS) {
+                portENTER_CRITICAL(&g_cam_hal_lock);
                 ll_cam_dma_reset(cam_obj);
+                portEXIT_CRITICAL(&g_cam_hal_lock);
                 dma_reset_counter++;
                 continue; /* retry with queue timeout */
             }
@@ -787,7 +810,9 @@ skip_eoi_check:
             CAM_WARN_THROTTLE(warn_eoi_miss_cnt,
                               "NO-EOI - JPEG end marker missing");
             /* Reset DMA so capture can resume after a truncated frame */
+            portENTER_CRITICAL(&g_cam_hal_lock);
             ll_cam_dma_reset(cam_obj);
+            portEXIT_CRITICAL(&g_cam_hal_lock);
             cam_give(dma_buffer);
             vTaskDelay(1);
             continue; /* wait for another frame */
@@ -812,6 +837,17 @@ void cam_give(camera_fb_t *dma_buffer)
     for (int x = 0; x < cam_obj->frame_cnt; x++) {
         if (&cam_obj->frames[x].fb == dma_buffer) {
             cam_obj->frames[x].en = 1;
+            if (cam_obj->state == CAM_STATE_IDLE) {
+                portENTER_CRITICAL(&g_cam_hal_lock);
+                if (cam_obj->state == CAM_STATE_IDLE) {
+                    int frame_pos;
+                    if (cam_start_frame(&frame_pos)) {
+                        cam_obj->frames[frame_pos].fb.len = 0;
+                        cam_obj->state = CAM_STATE_READ_BUF;
+                    }
+                }
+                portEXIT_CRITICAL(&g_cam_hal_lock);
+            }
             break;
         }
     }
@@ -820,6 +856,17 @@ void cam_give(camera_fb_t *dma_buffer)
 void cam_give_all(void) {
     for (int x = 0; x < cam_obj->frame_cnt; x++) {
         cam_obj->frames[x].en = 1;
+    }
+    if (cam_obj->state == CAM_STATE_IDLE) {
+        portENTER_CRITICAL(&g_cam_hal_lock);
+        if (cam_obj->state == CAM_STATE_IDLE) {
+            int frame_pos;
+            if (cam_start_frame(&frame_pos)) {
+                cam_obj->frames[frame_pos].fb.len = 0;
+                cam_obj->state = CAM_STATE_READ_BUF;
+            }
+        }
+        portEXIT_CRITICAL(&g_cam_hal_lock);
     }
 }
 
