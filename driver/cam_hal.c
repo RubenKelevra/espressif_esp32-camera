@@ -707,12 +707,18 @@ camera_fb_t *cam_take(TickType_t timeout)
 #endif
     /* throttle repeated NO-EOI warnings */
     static uint16_t warn_eoi_miss_cnt = 0;
+    /* throttle repeated timeout warnings */
+    static uint16_t warn_timeout_cnt = 0;
 
     for (;;)
     {
         TickType_t elapsed = xTaskGetTickCount() - start; /* TickType_t is unsigned so rollover is safe */
         if (elapsed >= timeout) {
-            ESP_LOGW(TAG, "Failed to get frame: timeout");
+            if (warn_timeout_cnt++ == 0) {
+                ESP_CAMERA_ETS_PRINTF(DRAM_STR("cam_hal: frame timeout, restarting\r\n"));
+            }
+            ll_cam_dma_reset(cam_obj);
+            cam_start();
             return NULL;
         }
         TickType_t remaining = timeout - elapsed;
@@ -772,6 +778,7 @@ camera_fb_t *cam_take(TickType_t timeout)
                     /* DMA may bypass cache, ensure full frame is visible */
                     cam_drop_psram_cache(dma_buffer->buf, dma_buffer->len);
                 }
+                warn_timeout_cnt = 0;
                 return dma_buffer;
             }
 
@@ -795,6 +802,7 @@ skip_eoi_check:
             cam_drop_psram_cache(dma_buffer->buf, dma_buffer->len);
         }
 
+        warn_timeout_cnt = 0;
         return dma_buffer;
     }
 }
