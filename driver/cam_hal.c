@@ -747,7 +747,17 @@ camera_fb_t *cam_take(TickType_t timeout)
                 s->reset(s);
             }
             vTaskDelay(10 / portTICK_PERIOD_MS);
+            cam_give_all();
             cam_start();
+            /* Discard a couple of initial frames after restart as they may be incomplete */
+            for (int i = 0; i < 2; i++) {
+                if (xQueueReceive(cam_obj->frame_buffer_queue, (void *)&dma_buffer,
+                                   0) == pdTRUE && dma_buffer) {
+                    cam_give(dma_buffer);
+                } else {
+                    break;
+                }
+            }
             return NULL;
         }
         TickType_t remaining = timeout - elapsed;
