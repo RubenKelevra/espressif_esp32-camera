@@ -742,10 +742,10 @@ camera_fb_t *cam_take(TickType_t timeout)
             sensor_t *s = esp_camera_sensor_get();
             portENTER_CRITICAL(&g_cam_hal_lock);
             ll_cam_dma_reset(cam_obj);
+            portEXIT_CRITICAL(&g_cam_hal_lock); /* interrupts enabled before reset */
             if (s && s->reset) {
                 s->reset(s);
             }
-            portEXIT_CRITICAL(&g_cam_hal_lock);
             vTaskDelay(10 / portTICK_PERIOD_MS);
             cam_start();
             return NULL;
