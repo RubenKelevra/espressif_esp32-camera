@@ -493,6 +493,9 @@ static esp_err_t cam_dma_config(const camera_config_t *config)
     if (fb_align == 0) {
         fb_align = 32;
     }
+    if (fb_align < dma_align) {
+        fb_align = dma_align;
+    }
     for (int x = 0; x < cam_obj->frame_cnt; x++) {
         cam_obj->frames[x].dma = NULL;
         cam_obj->frames[x].fb_offset = 0;
@@ -507,10 +510,10 @@ static esp_err_t cam_dma_config(const camera_config_t *config)
 #endif
         CAM_CHECK(cam_obj->frames[x].fb.buf != NULL, "frame buffer malloc failed", ESP_FAIL);
         if (cam_obj->psram_mode) {
-            //align PSRAM buffer. TODO: save the offset so proper address can be freed later
-            cam_obj->frames[x].fb_offset = dma_align - ((uint32_t)cam_obj->frames[x].fb.buf & (dma_align - 1));
+            uintptr_t mis = (uintptr_t)cam_obj->frames[x].fb.buf & (dma_align - 1);
+            cam_obj->frames[x].fb_offset = (dma_align - mis) & (dma_align - 1);
             cam_obj->frames[x].fb.buf += cam_obj->frames[x].fb_offset;
-            ESP_LOGI(TAG, "Frame[%d]: Offset: %u, Addr: 0x%08X", x, cam_obj->frames[x].fb_offset, (unsigned) cam_obj->frames[x].fb.buf);
+            ESP_LOGI(TAG, "Frame[%d]: Offset: %u, Addr: 0x%08X", x, cam_obj->frames[x].fb_offset, (unsigned)cam_obj->frames[x].fb.buf);
             cam_obj->frames[x].dma = allocate_dma_descriptors(cam_obj->dma_node_cnt, cam_obj->dma_node_buffer_size, cam_obj->frames[x].fb.buf);
             CAM_CHECK(cam_obj->frames[x].dma != NULL, "frame dma malloc failed", ESP_FAIL);
         }
