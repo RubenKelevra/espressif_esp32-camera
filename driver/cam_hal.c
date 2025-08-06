@@ -260,10 +260,10 @@ void IRAM_ATTR ll_cam_send_event(cam_obj_t *cam, cam_event_t cam_event, BaseType
 //Copy fram from DMA dma_buffer to fram dma_buffer
 static void cam_task(void *arg)
 {
-    int cnt = 0;
-    int frame_pos = 0;
+    static int cnt = 0;
+    static int frame_pos = 0;
     cam_obj->state = CAM_STATE_IDLE;
-    cam_event_t cam_event = 0;
+    static cam_event_t cam_event = 0;
 
     xQueueReset(cam_obj->event_queue);
 
@@ -285,8 +285,14 @@ static void cam_task(void *arg)
             break;
 
             case CAM_STATE_READ_BUF: {
-                camera_fb_t * frame_buffer_event = &cam_obj->frames[frame_pos].fb;
-                size_t pixels_per_dma = (cam_obj->dma_half_buffer_size * cam_obj->fb_bytes_per_pixel) / (cam_obj->dma_bytes_per_item * cam_obj->in_bytes_per_pixel);
+                static camera_fb_t * frame_buffer_event;
+                static size_t pixels_per_dma;
+                static size_t probe_len;
+                static uint8_t soi_probe[CAM_SOI_PROBE_BYTES];
+                static int soi_off;
+                static camera_fb_t * fb2;
+                frame_buffer_event = &cam_obj->frames[frame_pos].fb;
+                pixels_per_dma = (cam_obj->dma_half_buffer_size * cam_obj->fb_bytes_per_pixel) / (cam_obj->dma_bytes_per_item * cam_obj->in_bytes_per_pixel);
 
                 if (cam_event == CAM_IN_SUC_EOF_EVENT) {
                     if(!cam_obj->psram_mode){
@@ -317,7 +323,7 @@ static void cam_task(void *arg)
                     if (cam_obj->jpeg_mode && cnt == 0) {
                         if (cam_obj->psram_mode) {
                             /* dma_half_buffer_size already in BYTES (see ll_cam_memcpy()) */
-                            size_t probe_len = cam_obj->dma_half_buffer_size;
+                            probe_len = cam_obj->dma_half_buffer_size;
                             /* clamp to avoid copying past the end of soi_probe */
                             if (probe_len > CAM_SOI_PROBE_BYTES) {
                                 probe_len = CAM_SOI_PROBE_BYTES;
@@ -325,9 +331,8 @@ static void cam_task(void *arg)
                             /* Invalidate cache lines for the DMA buffer before probing */
                             cam_drop_psram_cache(frame_buffer_event->buf, probe_len);
 
-                            uint8_t soi_probe[CAM_SOI_PROBE_BYTES];
                             memcpy(soi_probe, frame_buffer_event->buf, probe_len);
-                            int soi_off = cam_verify_jpeg_soi(soi_probe, probe_len);
+                            soi_off = cam_verify_jpeg_soi(soi_probe, probe_len);
                             if (soi_off != 0) {
                                 static uint16_t warn_psram_soi_cnt = 0;
                                 if (soi_off > 0) {
@@ -342,7 +347,7 @@ static void cam_task(void *arg)
                                 continue;
                             }
                         } else {
-                            int soi_off = cam_verify_jpeg_soi(frame_buffer_event->buf, frame_buffer_event->len);
+                            soi_off = cam_verify_jpeg_soi(frame_buffer_event->buf, frame_buffer_event->len);
                             if (soi_off != 0) {
                                 static uint16_t warn_soi_bad_cnt = 0;
                                 if (soi_off > 0) {
@@ -398,7 +403,7 @@ static void cam_task(void *arg)
                         //send frame
                         if(!cam_obj->frames[frame_pos].en && xQueueSend(cam_obj->frame_buffer_queue, (void *)&frame_buffer_event, 0) != pdTRUE) {
                             //pop frame buffer from the queue
-                            camera_fb_t * fb2 = NULL;
+                            fb2 = NULL;
                             if(xQueueReceive(cam_obj->frame_buffer_queue, &fb2, 0) == pdTRUE) {
                                 //push the new frame to the end of the queue
                                 if (xQueueSend(cam_obj->frame_buffer_queue, (void *)&frame_buffer_event, 0) != pdTRUE) {
