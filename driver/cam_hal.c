@@ -20,6 +20,7 @@
 #include "freertos/task.h"
 #include "ll_cam.h"
 #include "cam_hal.h"
+#include "esp_camera_cache.h"
 
 #if (ESP_IDF_VERSION_MAJOR == 3) && (ESP_IDF_VERSION_MINOR == 3)
 #include "rom/ets_sys.h"
@@ -80,19 +81,6 @@ static portMUX_TYPE g_psram_dma_lock = portMUX_INITIALIZER_UNLOCKED;
  * by DMA.
  */
 
-static inline size_t dcache_line_size(void)
-{
-#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 2, 0)
-    /* cache_hal_get_cache_line_size() added extra argument from IDF 5.2 */
-    return cache_hal_get_cache_line_size(CACHE_LL_LEVEL_EXT_MEM, CACHE_TYPE_DATA);
-#else
-    /* Older releases only expose the ROM helper, all current targets
-     * have a 32‑byte DCache line */
-    return 32;
-#endif
-}
-
-/*
  * Invalidate CPU data cache lines that cover a region in PSRAM which
  * has just been written by DMA. This guarantees subsequent CPU reads
  * fetch the fresh data from PSRAM rather than stale cache contents.
@@ -100,10 +88,7 @@ static inline size_t dcache_line_size(void)
  */
 static inline void cam_drop_psram_cache(void *addr, size_t len)
 {
-    size_t line = dcache_line_size();
-    if (line == 0) {
-        line = 32; /* sane fallback */
-    }
+    size_t line = esp_camera_dcache_line_size();
     uintptr_t start = (uintptr_t)addr & ~(line - 1);
     size_t sync_len = (len + ((uintptr_t)addr - start) + line - 1) & ~(line - 1);
     esp_err_t err = esp_cache_msync((void *)start, sync_len, ESP_CACHE_MSYNC_FLAG_DIR_M2C);
