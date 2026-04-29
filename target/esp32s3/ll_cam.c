@@ -111,6 +111,9 @@ static void CAMERA_ISR_IRAM_ATTR ll_cam_vsync_isr(void *arg)
     LCD_CAM.lc_dma_int_clr.val = status.val;
 
     if (status.cam_vsync_int_st) {
+        if (cam->jpeg_mode && cam->psram_mode && cam->state == CAM_STATE_READ_BUF) {
+            ll_cam_stop(cam);
+        }
         ll_cam_send_event(cam, CAM_VSYNC_EVENT, &HPTaskAwoken);
     }
 
@@ -147,6 +150,7 @@ bool IRAM_ATTR ll_cam_stop(cam_obj_t *cam)
         GDMA.channel[cam->dma_num].in.int_ena.in_suc_eof = 0;
         GDMA.channel[cam->dma_num].in.int_clr.in_suc_eof = 1;
     }
+    LCD_CAM.cam_ctrl1.cam_start = 0;
     GDMA.channel[cam->dma_num].in.link.stop = 1;
     return true;
 }
