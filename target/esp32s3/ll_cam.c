@@ -267,6 +267,12 @@ static esp_err_t ll_cam_dma_init(cam_obj_t *cam)
 #if CONFIG_CAMERA_CONVERTER_ENABLED
 static esp_err_t ll_cam_converter_config(cam_obj_t *cam, const camera_config_t *config)
 {
+    if (config->pixel_format == PIXFORMAT_JPEG || config->conv_mode == CONV_DISABLE) {
+        LCD_CAM.cam_rgb_yuv.val = 0;
+        cam->conv_mode = CONV_DISABLE;
+        return ESP_OK;
+    }
+
     esp_err_t ret = ESP_OK;
 
     switch (config->conv_mode) {
@@ -291,6 +297,7 @@ static esp_err_t ll_cam_converter_config(cam_obj_t *cam, const camera_config_t *
         }
         break;
     default:
+        ret = ESP_ERR_NOT_SUPPORTED;
         break;
     }
 #if CONFIG_LCD_CAM_CONV_BT709_ENABLED
@@ -305,10 +312,16 @@ static esp_err_t ll_cam_converter_config(cam_obj_t *cam, const camera_config_t *
     LCD_CAM.cam_rgb_yuv.cam_conv_data_out_mode = 0;
     LCD_CAM.cam_rgb_yuv.cam_conv_data_in_mode = 0;
 #endif
+    if (ret != ESP_OK) {
+        LCD_CAM.cam_rgb_yuv.val = 0;
+        cam->conv_mode = CONV_DISABLE;
+        return ret;
+    }
+
     LCD_CAM.cam_rgb_yuv.cam_conv_mode_8bits_on = 1;
     LCD_CAM.cam_rgb_yuv.cam_conv_bypass = 1;
     cam->conv_mode = config->conv_mode;
-    return ret;
+    return ESP_OK;
 }
 #endif
 
@@ -355,7 +368,7 @@ esp_err_t ll_cam_config(cam_obj_t *cam, const camera_config_t *config)
     LCD_CAM.cam_rgb_yuv.val = 0;
 
 #if CONFIG_CAMERA_CONVERTER_ENABLED
-    if (config->conv_mode) {
+    if (config->pixel_format == PIXFORMAT_JPEG || config->conv_mode) {
         ret = ll_cam_converter_config(cam, config);
         if(ret != ESP_OK) {
             return ret;
