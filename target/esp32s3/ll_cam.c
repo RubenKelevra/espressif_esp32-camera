@@ -151,6 +151,16 @@ bool IRAM_ATTR ll_cam_stop(cam_obj_t *cam)
     return true;
 }
 
+static void IRAM_ATTR ll_cam_reset_dma_descriptors(lldesc_t *dma, uint32_t count)
+{
+    for (uint32_t i = 0; i < count; i++) {
+        dma[i].length = 0;
+        dma[i].sosf = 0;
+        dma[i].eof = 0;
+        dma[i].owner = 1;
+    }
+}
+
 bool ll_cam_start(cam_obj_t *cam, int frame_pos)
 {
     LCD_CAM.cam_ctrl1.cam_start = 0;
@@ -170,8 +180,10 @@ bool ll_cam_start(cam_obj_t *cam, int frame_pos)
     LCD_CAM.cam_ctrl1.cam_rec_data_bytelen = cam->dma_half_buffer_size - 1; // Ping pong operation
 
     if (!cam->psram_mode) {
+        ll_cam_reset_dma_descriptors(cam->dma, cam->dma_node_cnt);
         GDMA.channel[cam->dma_num].in.link.addr = ((uint32_t)&cam->dma[0]) & 0xfffff;
     } else {
+        ll_cam_reset_dma_descriptors(cam->frames[frame_pos].dma, cam->dma_node_cnt);
         GDMA.channel[cam->dma_num].in.link.addr = ((uint32_t)&cam->frames[frame_pos].dma[0]) & 0xfffff;
     }
 
