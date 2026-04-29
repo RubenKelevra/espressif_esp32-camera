@@ -177,7 +177,12 @@ bool ll_cam_start(cam_obj_t *cam, int frame_pos)
     GDMA.channel[cam->dma_num].in.conf0.in_rst = 1;
     GDMA.channel[cam->dma_num].in.conf0.in_rst = 0;
 
-    LCD_CAM.cam_ctrl1.cam_rec_data_bytelen = cam->dma_half_buffer_size - 1; // Ping pong operation
+    if (cam->jpeg_mode && cam->psram_mode) {
+        LCD_CAM.cam_ctrl.cam_vs_eof_en = 1;
+    } else {
+        LCD_CAM.cam_ctrl.cam_vs_eof_en = 0;
+        LCD_CAM.cam_ctrl1.cam_rec_data_bytelen = cam->dma_half_buffer_size - 1; // Ping pong operation
+    }
 
     if (!cam->psram_mode) {
         ll_cam_reset_dma_descriptors(cam->dma, cam->dma_node_cnt);

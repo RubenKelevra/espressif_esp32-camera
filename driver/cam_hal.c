@@ -393,7 +393,11 @@ static void cam_task(void *arg)
 
                         if (cam_obj->psram_mode) {
                             if (cam_obj->jpeg_mode) {
-                                frame_buffer_event->len = cnt * cam_obj->dma_half_buffer_size;
+                                frame_buffer_event->len = cam_dma_received_size(cam_obj->frames[frame_pos].dma,
+                                                                                 cam_obj->dma_node_cnt);
+                                if (frame_buffer_event->len == 0) {
+                                    frame_buffer_event->len = cnt * cam_obj->dma_half_buffer_size;
+                                }
                             } else {
                                 frame_buffer_event->len = cam_obj->recv_size;
                             }
@@ -435,6 +439,20 @@ static void cam_task(void *arg)
         }
         DBG_PIN_SET(0);
     }
+}
+
+static size_t cam_dma_received_size(const lldesc_t *dma, uint32_t count)
+{
+    size_t received = 0;
+
+    for (uint32_t i = 0; i < count; i++) {
+        received += dma[i].length;
+        if (dma[i].eof) {
+            break;
+        }
+    }
+
+    return received;
 }
 
 static lldesc_t * allocate_dma_descriptors(uint32_t count, uint16_t size, uint8_t * buffer)
