@@ -609,6 +609,16 @@ bool ll_cam_dma_sizes(cam_obj_t *cam)
     cam->dma_bytes_per_item = 1;
     if (cam->jpeg_mode) {
         if (cam->psram_mode) {
+            /* Direct JPEG-to-PSRAM mode intentionally describes only recv_size
+             * bytes to GDMA. The extra block allocated by cam_dma_config() is
+             * a software guard/overshoot area, not part of the descriptor ring.
+             *
+             * The camera task cannot know the exact final partial DMA block when
+             * VSYNC arrives, so it allows one additional block in its accounting
+             * to detect that capture is overrunning and stop GDMA before the
+             * circular descriptor list wraps into the beginning of the frame.
+             * Do not extend dma_buffer_size to include that guard block unless
+             * the whole overrun detection scheme is redesigned. */
             cam->dma_buffer_size = cam->recv_size;
             cam->dma_half_buffer_size = 1024;
             cam->dma_half_buffer_cnt = cam->dma_buffer_size / cam->dma_half_buffer_size;
