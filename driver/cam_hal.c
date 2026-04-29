@@ -106,7 +106,11 @@ static inline void cam_drop_psram_cache(void *addr, size_t len)
     }
     uintptr_t start = (uintptr_t)addr & ~(line - 1);
     size_t sync_len = (len + ((uintptr_t)addr - start) + line - 1) & ~(line - 1);
-    esp_cache_msync((void *)start, sync_len, ESP_CACHE_MSYNC_FLAG_DIR_M2C);
+    esp_err_t err = esp_cache_msync((void *)start, sync_len, ESP_CACHE_MSYNC_FLAG_DIR_M2C);
+    if (err != ESP_OK) {
+        ESP_CAMERA_ETS_PRINTF(DRAM_STR("cam_hal: cache msync failed addr=%p len=%u aligned=%p aligned_len=%u err=%d\r\n"),
+                              addr, (unsigned)len, (void *)start, (unsigned)sync_len, (int)err);
+    }
 }
 
 /* Throttle repeated warnings printed from tight loops / ISRs.
