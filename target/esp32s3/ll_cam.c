@@ -86,10 +86,12 @@ void ll_cam_dma_reset(cam_obj_t *cam)
         GDMA.channel[cam->dma_num].in.conf0.in_data_burst_en = 1;
     }
 
+#if ESP_IDF_VERSION < ESP_IDF_VERSION_VAL(5, 2, 0)
     GDMA.channel[cam->dma_num].in.conf1.in_check_owner = 0;
-    // GDMA.channel[cam->dma_num].in.conf1.in_ext_mem_bk_size = 2;
-
     GDMA.channel[cam->dma_num].in.peri_sel.sel = 5;
+#else
+    GDMA.channel[cam->dma_num].in.conf1.in_check_owner = 1;
+#endif
     //GDMA.channel[cam->dma_num].in.pri.rx_pri = 1;//rx prio 0-15
     //GDMA.channel[cam->dma_num].in.sram_size.in_size = 6;//This register is used to configure the size of L2 Tx FIFO for Rx channel. 0:16 bytes, 1:24 bytes, 2:32 bytes, 3: 40 bytes, 4: 48 bytes, 5:56 bytes, 6: 64 bytes, 7: 72 bytes, 8: 80 bytes.
     //GDMA.channel[cam->dma_num].in.weight.rx_weight = 7;//The weight of Rx channel 0-15
@@ -192,7 +194,9 @@ esp_err_t ll_cam_deinit(cam_obj_t *cam)
         cam->dma_intr_handle = NULL;
     }
     if (cam->dma_channel_handle) {
-        // gdma_disconnect(cam->dma_channel_handle); // not needed since code never calls gdma_connect() to connect channel to peripheral
+#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 2, 0)
+        gdma_disconnect(cam->dma_channel_handle);
+#endif
         gdma_del_channel(cam->dma_channel_handle);
         cam->dma_channel_handle = NULL;
         // GDMA.channel[cam->dma_num].in.link.addr = 0x0;
@@ -233,6 +237,39 @@ static esp_err_t ll_cam_dma_init(cam_obj_t *cam)
     }
     cam->dma_num = chan_id;
     ESP_LOGI(TAG, "DMA Channel=%d", cam->dma_num);
+
+#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 2, 0)
+    ret = gdma_connect(cam->dma_channel_handle, GDMA_MAKE_TRIGGER(GDMA_TRIG_PERIPH_CAM, 0));
+    if (ret != ESP_OK) {
+        cam_deinit();
+        ESP_LOGE(TAG, "Can't connect GDMA channel to camera peripheral");
+        return ESP_FAIL;
+    }
+
+    gdma_strategy_config_t strategy_config = {
+        .owner_check = true,
+        .auto_update_desc = false,
+    };
+    ret = gdma_apply_strategy(cam->dma_channel_handle, &strategy_config);
+    if (ret != ESP_OK) {
+        cam_deinit();
+        ESP_LOGE(TAG, "Can't apply GDMA strategy");
+        return ESP_FAIL;
+    }
+#endif
+
+#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 3, 0)
+    gdma_transfer_config_t transfer_config = {
+        .max_data_burst_size = 32,
+        .access_ext_mem = true,
+    };
+    ret = gdma_config_transfer(cam->dma_channel_handle, &transfer_config);
+    if (ret != ESP_OK) {
+        cam_deinit();
+        ESP_LOGE(TAG, "Can't configure GDMA transfer ability");
+        return ESP_FAIL;
+    }
+#endif
     // for (int x = (SOC_GDMA_PAIRS_PER_GROUP - 1); x >= 0; x--) {
     //     if (GDMA.channel[x].in.link.addr == 0x0) {
     //         cam->dma_num = x;
