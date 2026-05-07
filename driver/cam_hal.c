@@ -56,6 +56,7 @@
 
 static const char *TAG = "cam_hal";
 static cam_obj_t *cam_obj = NULL;
+static size_t cam_dma_received_size(const lldesc_t *dma, uint32_t count);
 #if defined(CONFIG_CAMERA_PSRAM_DMA)
 #define CAMERA_PSRAM_DMA_ENABLED CONFIG_CAMERA_PSRAM_DMA
 #else
@@ -79,8 +80,7 @@ static portMUX_TYPE g_psram_dma_lock = portMUX_INITIALIZER_UNLOCKED;
  * PSRAM DMA may bypass the CPU cache. Always call esp_cache_msync() on
  * PSRAM regions that the CPU will read so cached reads see the data written
  * by DMA.
- */
-
+ *
  * Invalidate CPU data cache lines that cover a region in PSRAM which
  * has just been written by DMA. This guarantees subsequent CPU reads
  * fetch the fresh data from PSRAM rather than stale cache contents.
