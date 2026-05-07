@@ -261,11 +261,7 @@ uint8_t SCCB_Read(uint8_t slv_addr, uint8_t reg)
                  slv_addr, reg, ret);
         return 0;
     }
-<<<<<<< HEAD
-
-=======
     ESP_LOGD(TAG, "read OK");
->>>>>>> 2ac69a6 (Change log level from warning to debug for read (#844))
     return rx_buffer[0];
 }
 
