@@ -74,6 +74,11 @@ static portMUX_TYPE g_psram_dma_lock = portMUX_INITIALIZER_UNLOCKED;
 #ifndef CAM_SOI_PROBE_BYTES
 #define CAM_SOI_PROBE_BYTES 32
 #endif
+
+#ifndef CAM_TRACE_STALL_US
+#define CAM_TRACE_STALL_US 50000
+#endif
+
 /*
  * PSRAM DMA may bypass the CPU cache. Always call esp_cache_msync() on
  * PSRAM regions that the CPU will read so cached reads see the data written
@@ -687,10 +692,14 @@ camera_fb_t *cam_take(TickType_t timeout)
 {
     camera_fb_t *dma_buffer = NULL;
     const TickType_t start = xTaskGetTickCount();
+    const int64_t take_start_us = esp_timer_get_time();
+    int64_t queue_wait_us = 0;
+    unsigned eoi_drop_count = 0;
 #if CONFIG_IDF_TARGET_ESP32S3
     uint16_t dma_reset_counter = 0;
     static const uint8_t MAX_GDMA_RESETS = 3;
 #else
+    uint16_t dma_reset_counter = 0;
     /* throttle repeated NULL frame warnings */
     static uint16_t warn_null_cnt = 0;
 #endif
@@ -701,20 +710,32 @@ camera_fb_t *cam_take(TickType_t timeout)
     {
         TickType_t elapsed = xTaskGetTickCount() - start; /* TickType_t is unsigned so rollover is safe */
         if (elapsed >= timeout) {
-            ESP_LOGW(TAG, "Failed to get frame: timeout");
+            ESP_LOGW(TAG, "Failed to get frame: timeout total=%lldus queue=%lldus eoi_drop=%u resets=%u",
+                     (long long) (esp_timer_get_time() - take_start_us),
+                     (long long) queue_wait_us,
+                     eoi_drop_count,
+                     (unsigned) dma_reset_counter);
             return NULL;
         }
         TickType_t remaining = timeout - elapsed;
 
+        const int64_t queue_start_us = esp_timer_get_time();
         if (xQueueReceive(cam_obj->frame_buffer_queue, (void *)&dma_buffer, remaining) == pdFALSE) {
+            queue_wait_us += esp_timer_get_time() - queue_start_us;
             continue;
         }
+        queue_wait_us += esp_timer_get_time() - queue_start_us;
 
         if (!dma_buffer) {
             /* Work-around for ESP32-S3 GDMA freeze when Wi-Fi STA starts.
              * See esp32-camera commit 984999f (issue #620). */
 #if CONFIG_IDF_TARGET_ESP32S3
             if (dma_reset_counter < MAX_GDMA_RESETS) {
+                ESP_LOGW(TAG, "cam_take NULL frame: reset capture DMA attempt=%u total=%lldus queue=%lldus psram=%d",
+                         (unsigned) (dma_reset_counter + 1),
+                         (long long) (esp_timer_get_time() - take_start_us),
+                         (long long) queue_wait_us,
+                         cam_obj->psram_mode);
                 ll_cam_dma_reset(cam_obj);
                 dma_reset_counter++;
                 continue; /* retry with queue timeout */
@@ -761,11 +782,28 @@ camera_fb_t *cam_take(TickType_t timeout)
                     /* DMA may bypass cache, ensure full frame is visible */
                     cam_drop_psram_cache(dma_buffer->buf, dma_buffer->len);
                 }
+                int64_t total_us = esp_timer_get_time() - take_start_us;
+                if (total_us >= CAM_TRACE_STALL_US) {
+                    ESP_LOGW(TAG, "cam_take slow ok total=%lldus queue=%lldus len=%u psram=%d jpeg=1 eoi_drop=%u resets=%u",
+                             (long long) total_us,
+                             (long long) queue_wait_us,
+                             (unsigned) dma_buffer->len,
+                             cam_obj->psram_mode,
+                             eoi_drop_count,
+                             (unsigned) dma_reset_counter);
+                }
                 return dma_buffer;
             }
 
 skip_eoi_check:
 
+            eoi_drop_count++;
+            ESP_LOGW(TAG, "cam_take drop NO-EOI len=%u total=%lldus queue=%lldus drops=%u resets=%u",
+                     (unsigned) dma_buffer->len,
+                     (long long) (esp_timer_get_time() - take_start_us),
+                     (long long) queue_wait_us,
+                     eoi_drop_count,
+                     (unsigned) dma_reset_counter);
             CAM_WARN_THROTTLE(warn_eoi_miss_cnt,
                               "NO-EOI - JPEG end marker missing");
             cam_give(dma_buffer);
@@ -781,6 +819,16 @@ skip_eoi_check:
             cam_drop_psram_cache(dma_buffer->buf, dma_buffer->len);
         }
 
+        int64_t total_us = esp_timer_get_time() - take_start_us;
+        if (total_us >= CAM_TRACE_STALL_US) {
+            ESP_LOGW(TAG, "cam_take slow ok total=%lldus queue=%lldus len=%u psram=%d jpeg=0 eoi_drop=%u resets=%u",
+                     (long long) total_us,
+                     (long long) queue_wait_us,
+                     (unsigned) dma_buffer->len,
+                     cam_obj->psram_mode,
+                     eoi_drop_count,
+                     (unsigned) dma_reset_counter);
+        }
         return dma_buffer;
     }
 }
