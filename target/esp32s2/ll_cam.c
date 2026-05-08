@@ -85,7 +85,7 @@ bool IRAM_ATTR ll_cam_stop(cam_obj_t *cam)
 {
     I2S0.conf.rx_start = 0;
 
-    if (cam->jpeg_mode || !cam->psram_mode) {
+    if (cam->jpeg_mode || !cam->dma_mode) {
         I2S_ISR_DISABLE(in_suc_eof);
     }
 
@@ -108,7 +108,7 @@ bool ll_cam_start(cam_obj_t *cam, int frame_pos)
 {
     I2S0.conf.rx_start = 0;
 
-    if (cam->jpeg_mode || !cam->psram_mode) {
+    if (cam->jpeg_mode || !cam->dma_mode) {
         I2S_ISR_ENABLE(in_suc_eof);
     }
 
@@ -124,7 +124,7 @@ bool ll_cam_start(cam_obj_t *cam, int frame_pos)
     I2S0.lc_conf.ahbm_rst = 0;
 
     I2S0.rx_eof_num = cam->dma_half_buffer_size; // Ping pong operation
-    if (!cam->psram_mode) {
+    if (!cam->dma_mode) {
         I2S0.in_link.addr = ((uint32_t)&cam->dma[0]) & 0xfffff;
     } else {
         I2S0.in_link.addr = ((uint32_t)&cam->frames[frame_pos].dma[0]) & 0xfffff;
@@ -317,7 +317,7 @@ static bool ll_cam_calc_rgb_dma(cam_obj_t *cam){
 
     cam->dma_node_buffer_size = node_size * cam->dma_bytes_per_item;
 
-    if (cam->psram_mode) {
+    if (cam->dma_mode) {
         cam->dma_buffer_size = cam->recv_size * cam->dma_bytes_per_item;
         cam->dma_half_buffer_cnt = 2;
         cam->dma_half_buffer_size = cam->dma_buffer_size / cam->dma_half_buffer_cnt;
@@ -361,7 +361,7 @@ bool ll_cam_dma_sizes(cam_obj_t *cam)
 {
     cam->dma_bytes_per_item = 1;
     if (cam->jpeg_mode) {
-        if (cam->psram_mode) {
+        if (cam->dma_mode) {
             cam->dma_buffer_size = cam->recv_size;
             cam->dma_half_buffer_size = 1024;
             cam->dma_half_buffer_cnt = cam->dma_buffer_size / cam->dma_half_buffer_size;

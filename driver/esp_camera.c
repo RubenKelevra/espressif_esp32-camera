@@ -537,7 +537,7 @@ esp_err_t esp_camera_reconfigure(const camera_config_t *config)
 
 esp_err_t esp_camera_set_psram_mode(bool enable)
 {
-    cam_set_psram_mode(enable);
+    cam_set_dma_mode(enable);
     if (!s_state) {
         return ESP_ERR_INVALID_STATE;
     }
@@ -546,5 +546,5 @@ esp_err_t esp_camera_set_psram_mode(bool enable)
 
 bool esp_camera_get_psram_mode(void)
 {
-    return cam_get_psram_mode();
+    return cam_get_dma_mode();
 }

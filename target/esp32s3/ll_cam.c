@@ -81,7 +81,7 @@ void ll_cam_dma_reset(cam_obj_t *cam)
     GDMA.channel[cam->dma_num].in.conf0.in_rst = 0;
 
     //internal SRAM only
-    if (!cam->psram_mode) {
+    if (!cam->dma_mode) {
         GDMA.channel[cam->dma_num].in.conf0.indscr_burst_en = 1;
         GDMA.channel[cam->dma_num].in.conf0.in_data_burst_en = 1;
     }
@@ -106,9 +106,9 @@ static void CAMERA_ISR_IRAM_ATTR ll_cam_vsync_isr(void *arg)
     LCD_CAM.lc_dma_int_clr.val = status.val;
 
     if (status.cam_vsync_int_st) {
-        if (cam->jpeg_mode && cam->psram_mode && cam->state == CAM_STATE_READ_BUF) {
-            ll_cam_stop(cam);
-        }
+        /* In VSYNC-EOF DMA mode, VSYNC is both the camera frame boundary and
+         * the hardware source for GDMA EOF.  The ISR must not stop or clear
+         * GDMA here; descriptor writeback is consumed by the GDMA EOF path. */
         ll_cam_send_event(cam, CAM_VSYNC_EVENT, &HPTaskAwoken);
     }
 
@@ -130,6 +130,9 @@ static void CAMERA_ISR_IRAM_ATTR ll_cam_dma_isr(void *arg)
 
     GDMA.channel[cam->dma_num].in.int_clr.val = status.val;
 
+    if (status.in_dscr_err || status.in_dscr_empty) {
+        ll_cam_send_event(cam, CAM_DMA_ERROR_EVENT, &HPTaskAwoken);
+    }
     if (status.in_suc_eof) {
         ll_cam_send_event(cam, CAM_IN_SUC_EOF_EVENT, &HPTaskAwoken);
     }
@@ -141,10 +144,12 @@ static void CAMERA_ISR_IRAM_ATTR ll_cam_dma_isr(void *arg)
 
 bool IRAM_ATTR ll_cam_stop(cam_obj_t *cam)
 {
-    if (cam->jpeg_mode || !cam->psram_mode) {
-        GDMA.channel[cam->dma_num].in.int_ena.in_suc_eof = 0;
-        GDMA.channel[cam->dma_num].in.int_clr.in_suc_eof = 1;
-    }
+    GDMA.channel[cam->dma_num].in.int_ena.in_suc_eof = 0;
+    GDMA.channel[cam->dma_num].in.int_ena.in_dscr_err = 0;
+    GDMA.channel[cam->dma_num].in.int_ena.in_dscr_empty = 0;
+    GDMA.channel[cam->dma_num].in.int_clr.in_suc_eof = 1;
+    GDMA.channel[cam->dma_num].in.int_clr.in_dscr_err = 1;
+    GDMA.channel[cam->dma_num].in.int_clr.in_dscr_empty = 1;
     LCD_CAM.cam_ctrl1.cam_start = 0;
     GDMA.channel[cam->dma_num].in.link.stop = 1;
     return true;
@@ -164,9 +169,16 @@ bool ll_cam_start(cam_obj_t *cam, int frame_pos)
 {
     LCD_CAM.cam_ctrl1.cam_start = 0;
 
-    if (cam->jpeg_mode || !cam->psram_mode) {
-        GDMA.channel[cam->dma_num].in.int_clr.in_suc_eof = 1;
-        GDMA.channel[cam->dma_num].in.int_ena.in_suc_eof = 1;
+    GDMA.channel[cam->dma_num].in.int_clr.in_suc_eof = 1;
+    GDMA.channel[cam->dma_num].in.int_clr.in_dscr_err = 1;
+    GDMA.channel[cam->dma_num].in.int_clr.in_dscr_empty = 1;
+    GDMA.channel[cam->dma_num].in.int_ena.in_suc_eof = 1;
+    if (cam->jpeg_mode && cam->dma_mode) {
+        GDMA.channel[cam->dma_num].in.int_ena.in_dscr_err = 1;
+        GDMA.channel[cam->dma_num].in.int_ena.in_dscr_empty = 1;
+    } else {
+        GDMA.channel[cam->dma_num].in.int_ena.in_dscr_err = 0;
+        GDMA.channel[cam->dma_num].in.int_ena.in_dscr_empty = 0;
     }
 
     LCD_CAM.cam_ctrl1.cam_reset = 1;
@@ -176,14 +188,14 @@ bool ll_cam_start(cam_obj_t *cam, int frame_pos)
     GDMA.channel[cam->dma_num].in.conf0.in_rst = 1;
     GDMA.channel[cam->dma_num].in.conf0.in_rst = 0;
 
-    if (cam->jpeg_mode && cam->psram_mode) {
+    if (cam->jpeg_mode && cam->dma_mode) {
         LCD_CAM.cam_ctrl.cam_vs_eof_en = 1;
     } else {
         LCD_CAM.cam_ctrl.cam_vs_eof_en = 0;
         LCD_CAM.cam_ctrl1.cam_rec_data_bytelen = cam->dma_half_buffer_size - 1; // Ping pong operation
     }
 
-    if (!cam->psram_mode) {
+    if (!cam->dma_mode) {
         ll_cam_reset_dma_descriptors(cam->dma, cam->dma_node_cnt);
         GDMA.channel[cam->dma_num].in.link.addr = ((uint32_t)&cam->dma[0]) & 0xfffff;
     } else {
@@ -577,11 +589,11 @@ static bool ll_cam_calc_rgb_dma(cam_obj_t *cam){
 
     // Calculate DMA size
     size_t dma_buffer_max = 2 * dma_half_buffer_max;
-    if (cam->psram_mode) {
+    if (cam->dma_mode) {
         dma_buffer_max = cam->recv_size / cam->dma_bytes_per_item;
     }
     size_t dma_buffer_size = dma_buffer_max;
-    if (!cam->psram_mode) {
+    if (!cam->dma_mode) {
         dma_buffer_size =(dma_buffer_max / dma_half_buffer) * dma_half_buffer;
     }
 
@@ -599,19 +611,14 @@ bool ll_cam_dma_sizes(cam_obj_t *cam)
 {
     cam->dma_bytes_per_item = 1;
     if (cam->jpeg_mode) {
-        if (cam->psram_mode) {
-            /* Direct JPEG-to-PSRAM mode intentionally describes only recv_size
-             * bytes to GDMA. The extra block allocated by cam_dma_config() is
-             * a software guard/overshoot area, not part of the descriptor ring.
-             *
-             * The camera task cannot know the exact final partial DMA block when
-             * VSYNC arrives, so it allows one additional block in its accounting
-             * to detect that capture is overrunning and stop GDMA before the
-             * circular descriptor list wraps into the beginning of the frame.
-             * Do not extend dma_buffer_size to include that guard block unless
-             * the whole overrun detection scheme is redesigned. */
-            cam->dma_buffer_size = cam->recv_size;
+        if (cam->dma_mode) {
+            /* VSYNC-EOF DMA mode uses a finite descriptor span.  If the sensor
+             * produces more bytes than this configured capture span before
+             * VSYNC EOF, GDMA raises IN_DSCR_EMPTY instead of wrapping into the
+             * beginning of the framebuffer. */
             cam->dma_half_buffer_size = 1024;
+            cam->dma_buffer_size = (cam->recv_size + cam->dma_half_buffer_size - 1)
+                                 & ~(cam->dma_half_buffer_size - 1);
             cam->dma_half_buffer_cnt = cam->dma_buffer_size / cam->dma_half_buffer_size;
             cam->dma_node_buffer_size = cam->dma_half_buffer_size;
         } else {

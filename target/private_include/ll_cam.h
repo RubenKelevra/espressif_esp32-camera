@@ -77,7 +77,8 @@
 
 typedef enum {
     CAM_IN_SUC_EOF_EVENT = 0,
-    CAM_VSYNC_EVENT
+    CAM_VSYNC_EVENT,
+    CAM_DMA_ERROR_EVENT,
 } cam_event_t;
 
 typedef enum {
@@ -125,7 +126,7 @@ typedef struct {
     uint32_t frame_cnt;
     uint32_t recv_size;
     bool swap_data;
-    bool psram_mode;
+    bool dma_mode;
 
     //for RGB/YUV modes
     uint16_t width;
