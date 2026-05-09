@@ -153,6 +153,7 @@ void ll_cam_vsync_intr_enable(cam_obj_t *cam, bool en);
 esp_err_t ll_cam_set_pin(cam_obj_t *cam, const camera_config_t *config);
 esp_err_t ll_cam_init_isr(cam_obj_t *cam);
 void ll_cam_do_vsync(cam_obj_t *cam);
+void ll_cam_set_vsync_eof(cam_obj_t *cam, bool en);
 uint8_t ll_cam_get_dma_align(cam_obj_t *cam);
 bool ll_cam_dma_sizes(cam_obj_t *cam);
 size_t ll_cam_memcpy(cam_obj_t *cam, uint8_t *out, const uint8_t *in, size_t len);

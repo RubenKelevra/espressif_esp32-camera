@@ -223,11 +223,12 @@ static bool cam_start_frame(int * frame_pos)
 {
     if (cam_get_next_frame(frame_pos)) {
         if(ll_cam_start(cam_obj, *frame_pos)){
-            if (!cam_obj->dma_mode || !cam_obj->jpeg_mode) {
-                /* The legacy chunk-EOF path needs a synthetic VSYNC to arm the
-                 * camera cleanly.  VSYNC-EOF DMA mode must not synthesize VSYNC:
-                 * doing so would immediately complete the frame it just started. */
-                ll_cam_do_vsync(cam_obj);
+            /* LCD_CAM needs a synthetic VSYNC edge after starting a transaction.
+             * For JPEG DMA mode, ll_cam_start() temporarily keeps CAM_VS_EOF_EN
+             * disabled so this priming pulse cannot complete the frame. */
+            ll_cam_do_vsync(cam_obj);
+            if (cam_obj->dma_mode && cam_obj->jpeg_mode) {
+                ll_cam_set_vsync_eof(cam_obj, true);
             }
             uint64_t us = (uint64_t)esp_timer_get_time();
             cam_obj->frames[*frame_pos].fb.timestamp.tv_sec = us / 1000000UL;

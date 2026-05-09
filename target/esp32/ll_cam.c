@@ -400,6 +400,13 @@ void ll_cam_do_vsync(cam_obj_t *cam)
 {
 }
 
+
+void ll_cam_set_vsync_eof(cam_obj_t *cam, bool en)
+{
+    (void)cam;
+    (void)en;
+}
+
 uint8_t ll_cam_get_dma_align(cam_obj_t *cam)
 {
     return 0;

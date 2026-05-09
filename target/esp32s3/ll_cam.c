@@ -189,7 +189,11 @@ bool ll_cam_start(cam_obj_t *cam, int frame_pos)
     GDMA.channel[cam->dma_num].in.conf0.in_rst = 0;
 
     if (cam->jpeg_mode && cam->dma_mode) {
-        LCD_CAM.cam_ctrl.cam_vs_eof_en = 1;
+        /* Keep VSYNC EOF disabled while cam_start_frame() emits the synthetic
+         * VSYNC priming pulse.  The pulse is needed to arm the LCD_CAM capture
+         * path, but it must not complete the just-started GDMA transaction. */
+        LCD_CAM.cam_ctrl.cam_vs_eof_en = 0;
+        LCD_CAM.cam_ctrl1.cam_rec_data_bytelen = cam->dma_buffer_size - 1;
     } else {
         LCD_CAM.cam_ctrl.cam_vs_eof_en = 0;
         LCD_CAM.cam_ctrl1.cam_rec_data_bytelen = cam->dma_half_buffer_size - 1; // Ping pong operation
@@ -524,6 +528,13 @@ void ll_cam_do_vsync(cam_obj_t *cam)
     gpio_matrix_in(cam->vsync_pin, CAM_V_SYNC_IDX, !cam->vsync_invert);
     ets_delay_us(10);
     gpio_matrix_in(cam->vsync_pin, CAM_V_SYNC_IDX, cam->vsync_invert);
+}
+
+void ll_cam_set_vsync_eof(cam_obj_t *cam, bool en)
+{
+    (void)cam;
+    LCD_CAM.cam_ctrl.cam_vs_eof_en = en ? 1 : 0;
+    LCD_CAM.cam_ctrl.cam_update = 1;
 }
 
 uint8_t ll_cam_get_dma_align(cam_obj_t *cam)
