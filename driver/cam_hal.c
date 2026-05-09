@@ -223,6 +223,11 @@ static bool cam_start_frame(int * frame_pos)
 {
     if (cam_get_next_frame(frame_pos)) {
         if(ll_cam_start(cam_obj, *frame_pos)){
+            if (cam_obj->dma_mode && cam_obj->jpeg_mode) {
+                ESP_LOGW(TAG, "JPEG DMA start: frame=%d nodes=%lu bytes=%lu recv=%lu fb=%lu",
+                         *frame_pos, cam_obj->dma_node_cnt, cam_obj->dma_buffer_size,
+                         cam_obj->recv_size, cam_obj->fb_size);
+            }
             /* LCD_CAM needs a synthetic VSYNC edge after starting a transaction.
              * For JPEG DMA mode, ll_cam_start() temporarily keeps CAM_VS_EOF_EN
              * disabled so this priming pulse cannot complete the frame. */
@@ -387,13 +392,25 @@ static void cam_start_next_or_idle(int *frame_pos)
 
 static void cam_task_handle_dma_jpeg_event(cam_event_t cam_event, int *frame_pos)
 {
+    static uint32_t dma_jpeg_vsync_events = 0;
+    static uint32_t dma_jpeg_eof_events = 0;
+    static uint32_t dma_jpeg_error_events = 0;
+
     if (cam_event == CAM_DMA_ERROR_EVENT) {
+        dma_jpeg_error_events++;
+        ESP_LOGW(TAG, "JPEG DMA event: descriptor error, frame=%d, err=%lu, vsync=%lu, eof=%lu",
+                 *frame_pos, dma_jpeg_error_events, dma_jpeg_vsync_events, dma_jpeg_eof_events);
         cam_abort_dma_frame(*frame_pos, "DMA descriptor error");
         cam_obj->state = CAM_STATE_IDLE;
         return;
     }
 
     if (cam_event == CAM_VSYNC_EVENT) {
+        dma_jpeg_vsync_events++;
+        if (dma_jpeg_vsync_events <= 8 || (dma_jpeg_vsync_events & 0x3f) == 0) {
+            ESP_LOGW(TAG, "JPEG DMA event: VSYNC while waiting EOF, frame=%d, vsync=%lu, eof=%lu, err=%lu",
+                     *frame_pos, dma_jpeg_vsync_events, dma_jpeg_eof_events, dma_jpeg_error_events);
+        }
         /* In VSYNC-EOF mode this boundary is expected to generate the GDMA EOF
          * event.  The frame is completed only after descriptor EOF writeback is
          * observed in CAM_IN_SUC_EOF_EVENT. */
@@ -404,6 +421,9 @@ static void cam_task_handle_dma_jpeg_event(cam_event_t cam_event, int *frame_pos
         return;
     }
 
+    dma_jpeg_eof_events++;
+    ESP_LOGW(TAG, "JPEG DMA event: EOF, frame=%d, vsync=%lu, eof=%lu, err=%lu",
+             *frame_pos, dma_jpeg_vsync_events, dma_jpeg_eof_events, dma_jpeg_error_events);
     (void)cam_finish_dma_jpeg_frame(*frame_pos);
     cam_start_next_or_idle(frame_pos);
 }
@@ -842,6 +862,12 @@ camera_fb_t *cam_take(TickType_t timeout)
         TickType_t elapsed = xTaskGetTickCount() - start; /* TickType_t is unsigned so rollover is safe */
         if (elapsed >= timeout) {
             ESP_LOGW(TAG, "Failed to get frame: timeout");
+#if CONFIG_IDF_TARGET_ESP32S3
+            if (cam_obj && cam_obj->dma_mode && cam_obj->jpeg_mode) {
+                ESP_LOGW(TAG, "JPEG DMA timeout: state=%u", (unsigned)cam_obj->state);
+                ll_cam_dma_print_state(cam_obj);
+            }
+#endif
             return NULL;
         }
         TickType_t remaining = timeout - elapsed;
