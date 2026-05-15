@@ -213,6 +213,10 @@ static bool cam_get_next_frame(int * frame_pos)
                 return true;
             }
         }
+        if (cam_obj->dma_mode && cam_obj->jpeg_mode) {
+            ESP_LOGW(TAG, "JPEG DMA no free frame: current=%d q=%u",
+                     *frame_pos, (unsigned)uxQueueMessagesWaiting(cam_obj->frame_buffer_queue));
+        }
     } else {
         return true;
     }
@@ -263,6 +267,9 @@ void IRAM_ATTR ll_cam_send_event(cam_obj_t *cam, cam_event_t cam_event, BaseType
         case CAM_DMA_ERROR_EVENT:
             CAM_WARN_THROTTLE(ovf_cnt, "EV-DMA-ERR-OVF");
             break;
+        case CAM_FRAME_RETURNED_EVENT:
+            CAM_WARN_THROTTLE(ovf_cnt, "EV-FB-RETURN-OVF");
+            break;
         default:
             CAM_WARN_THROTTLE(ovf_cnt, "EV-UNKNOWN-OVF");
             break;
@@ -296,6 +303,11 @@ static bool cam_queue_frame(camera_fb_t *frame_buffer_event, int frame_pos)
     cam_obj->frames[frame_pos].en = 0;
 
     if (xQueueSend(cam_obj->frame_buffer_queue, (void *)&frame_buffer_event, 0) == pdTRUE) {
+        if (cam_obj->dma_mode && cam_obj->jpeg_mode) {
+            ESP_LOGW(TAG, "JPEG DMA queue frame=%d len=%u q=%u",
+                     frame_pos, (unsigned)frame_buffer_event->len,
+                     (unsigned)uxQueueMessagesWaiting(cam_obj->frame_buffer_queue));
+        }
         return true;
     }
 
@@ -313,6 +325,18 @@ static bool cam_queue_frame(camera_fb_t *frame_buffer_event, int frame_pos)
         return false;
     }
 
+    if (cam_obj->dma_mode && cam_obj->jpeg_mode) {
+        int old_pos = -1;
+        for (int x = 0; x < cam_obj->frame_cnt; x++) {
+            if (&cam_obj->frames[x].fb == old_frame) {
+                old_pos = x;
+                break;
+            }
+        }
+        ESP_LOGW(TAG, "JPEG DMA replace old=%d new=%d len=%u q=%u",
+                 old_pos, frame_pos, (unsigned)frame_buffer_event->len,
+                 (unsigned)uxQueueMessagesWaiting(cam_obj->frame_buffer_queue));
+    }
     cam_give(old_frame);
     return true;
 }
@@ -386,6 +410,10 @@ static void cam_start_next_or_idle(int *frame_pos)
         cam_obj->frames[*frame_pos].fb.len = 0;
         cam_obj->state = CAM_STATE_READ_BUF;
     } else {
+        if (cam_obj->dma_mode && cam_obj->jpeg_mode) {
+            ESP_LOGW(TAG, "JPEG DMA idle: no frame available q=%u",
+                     (unsigned)uxQueueMessagesWaiting(cam_obj->frame_buffer_queue));
+        }
         cam_obj->state = CAM_STATE_IDLE;
     }
 }
@@ -541,6 +569,11 @@ static void cam_task_handle_bounce_vsync(camera_fb_t *frame, int *frame_pos, int
  *   the whole frame.  The task publishes only from the GDMA EOF event, after
  *   descriptor length/eof writeback is visible.  Descriptor-empty/error is the
  *   overrun guard; there is no circular-descriptor overshoot area in this mode.
+ *
+ * When all framebuffer slots are held by the application, the task becomes
+ * idle.  cam_give() posts CAM_FRAME_RETURNED_EVENT after marking a slot free so
+ * the task can resume capture without depending on LCD_CAM VSYNC interrupts
+ * while the peripheral is stopped.
  */
 static void cam_task(void *arg)
 {
@@ -557,7 +590,7 @@ static void cam_task(void *arg)
 
         switch (cam_obj->state) {
         case CAM_STATE_IDLE:
-            if (cam_event == CAM_VSYNC_EVENT) {
+            if (cam_event == CAM_VSYNC_EVENT || cam_event == CAM_FRAME_RETURNED_EVENT) {
                 cam_start_next_or_idle(&frame_pos);
                 cnt = 0;
             }
@@ -876,6 +909,21 @@ camera_fb_t *cam_take(TickType_t timeout)
             continue;
         }
 
+#if CONFIG_IDF_TARGET_ESP32S3
+        if (cam_obj && cam_obj->dma_mode && cam_obj->jpeg_mode) {
+            int got_pos = -1;
+            for (int x = 0; x < cam_obj->frame_cnt; x++) {
+                if (&cam_obj->frames[x].fb == dma_buffer) {
+                    got_pos = x;
+                    break;
+                }
+            }
+            ESP_LOGW(TAG, "JPEG DMA take: frame=%d ptr=%p len=%u q=%u",
+                     got_pos, dma_buffer, dma_buffer ? (unsigned)dma_buffer->len : 0,
+                     (unsigned)uxQueueMessagesWaiting(cam_obj->frame_buffer_queue));
+        }
+#endif
+
         if (!dma_buffer) {
             /* Work-around for ESP32-S3 GDMA freeze when Wi-Fi STA starts.
              * See esp32-camera commit 984999f (issue #620). */
@@ -934,6 +982,11 @@ skip_eoi_check:
 
             CAM_WARN_THROTTLE(warn_eoi_miss_cnt,
                               "NO-EOI - JPEG end marker missing");
+#if CONFIG_IDF_TARGET_ESP32S3
+            if (cam_obj && cam_obj->dma_mode) {
+                ESP_LOGW(TAG, "JPEG DMA take reject: NO-EOI len=%u", (unsigned)dma_buffer->len);
+            }
+#endif
             cam_give(dma_buffer);
             continue; /* wait for another frame */
         } else if (cam_obj->dma_mode &&
@@ -953,11 +1006,19 @@ skip_eoi_check:
 
 void cam_give(camera_fb_t *dma_buffer)
 {
+    bool returned = false;
+
     for (int x = 0; x < cam_obj->frame_cnt; x++) {
         if (&cam_obj->frames[x].fb == dma_buffer) {
             cam_obj->frames[x].en = 1;
+            returned = true;
             break;
         }
+    }
+
+    if (returned && cam_obj->event_queue && cam_obj->state == CAM_STATE_IDLE) {
+        cam_event_t event = CAM_FRAME_RETURNED_EVENT;
+        (void)xQueueSend(cam_obj->event_queue, (void *)&event, 0);
     }
 }
 
