@@ -214,8 +214,9 @@ static bool cam_get_next_frame(int * frame_pos)
             }
         }
         if (cam_obj->dma_mode && cam_obj->jpeg_mode) {
-            ESP_LOGW(TAG, "JPEG DMA no free frame: current=%d q=%u",
-                     *frame_pos, (unsigned)uxQueueMessagesWaiting(cam_obj->frame_buffer_queue));
+            ESP_LOGW(TAG, "JPEG DMA no free frame: current=%d q=%u en=0x%lx",
+                     *frame_pos, (unsigned)uxQueueMessagesWaiting(cam_obj->frame_buffer_queue),
+                     (unsigned long)cam_frame_enable_mask());
         }
     } else {
         return true;
@@ -404,6 +405,19 @@ static void cam_abort_dma_frame(int frame_pos, const char *reason)
     cam_obj->frames[frame_pos].en = 1;
 }
 
+static uint32_t cam_frame_enable_mask(void)
+{
+    uint32_t mask = 0;
+
+    for (int x = 0; x < cam_obj->frame_cnt && x < 32; x++) {
+        if (cam_obj->frames[x].en) {
+            mask |= (1u << x);
+        }
+    }
+
+    return mask;
+}
+
 static void cam_start_next_or_idle(int *frame_pos)
 {
     if (cam_start_frame(frame_pos)) {
@@ -411,8 +425,9 @@ static void cam_start_next_or_idle(int *frame_pos)
         cam_obj->state = CAM_STATE_READ_BUF;
     } else {
         if (cam_obj->dma_mode && cam_obj->jpeg_mode) {
-            ESP_LOGW(TAG, "JPEG DMA idle: no frame available q=%u",
-                     (unsigned)uxQueueMessagesWaiting(cam_obj->frame_buffer_queue));
+            ESP_LOGW(TAG, "JPEG DMA idle: no frame available q=%u en=0x%lx",
+                     (unsigned)uxQueueMessagesWaiting(cam_obj->frame_buffer_queue),
+                     (unsigned long)cam_frame_enable_mask());
         }
         cam_obj->state = CAM_STATE_IDLE;
     }
@@ -897,7 +912,15 @@ camera_fb_t *cam_take(TickType_t timeout)
             ESP_LOGW(TAG, "Failed to get frame: timeout");
 #if CONFIG_IDF_TARGET_ESP32S3
             if (cam_obj && cam_obj->dma_mode && cam_obj->jpeg_mode) {
-                ESP_LOGW(TAG, "JPEG DMA timeout: state=%u", (unsigned)cam_obj->state);
+                ESP_LOGW(TAG, "JPEG DMA timeout: state=%u q=%u en=0x%lx",
+                         (unsigned)cam_obj->state,
+                         (unsigned)uxQueueMessagesWaiting(cam_obj->frame_buffer_queue),
+                         (unsigned long)cam_frame_enable_mask());
+                if (cam_obj->state == CAM_STATE_IDLE && cam_frame_enable_mask() != 0) {
+                    cam_event_t event = CAM_FRAME_RETURNED_EVENT;
+                    ESP_LOGW(TAG, "JPEG DMA timeout kick: posting frame-return event");
+                    (void)xQueueSend(cam_obj->event_queue, (void *)&event, 0);
+                }
                 ll_cam_dma_print_state(cam_obj);
             }
 #endif
@@ -1006,18 +1029,24 @@ skip_eoi_check:
 
 void cam_give(camera_fb_t *dma_buffer)
 {
-    bool returned = false;
+    int returned_pos = -1;
 
     for (int x = 0; x < cam_obj->frame_cnt; x++) {
         if (&cam_obj->frames[x].fb == dma_buffer) {
             cam_obj->frames[x].en = 1;
-            returned = true;
+            returned_pos = x;
             break;
         }
     }
 
-    if (returned && cam_obj->event_queue && cam_obj->state == CAM_STATE_IDLE) {
+    if (returned_pos >= 0 && cam_obj->event_queue) {
         cam_event_t event = CAM_FRAME_RETURNED_EVENT;
+        if (cam_obj->dma_mode && cam_obj->jpeg_mode) {
+            ESP_LOGW(TAG, "JPEG DMA give: frame=%d state=%u q=%u en=0x%lx",
+                     returned_pos, (unsigned)cam_obj->state,
+                     (unsigned)uxQueueMessagesWaiting(cam_obj->frame_buffer_queue),
+                     (unsigned long)cam_frame_enable_mask());
+        }
         (void)xQueueSend(cam_obj->event_queue, (void *)&event, 0);
     }
 }
