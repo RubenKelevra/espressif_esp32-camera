@@ -72,20 +72,23 @@ void ll_cam_dma_print_state(cam_obj_t *cam)
 
 void ll_cam_dma_reset(cam_obj_t *cam)
 {
+    /* gdma_config_transfer() configures descriptor burst, data burst, and the
+     * external-memory burst block size.  A raw conf0.val = 0 here wipes those
+     * transport settings, which is especially harmful for direct PSRAM DMA.
+     * Preserve the transfer configuration while still resetting the RX engine. */
+    uint32_t desc_burst_en = GDMA.channel[cam->dma_num].in.conf0.indscr_burst_en;
+    uint32_t data_burst_en = GDMA.channel[cam->dma_num].in.conf0.in_data_burst_en;
+    uint32_t ext_mem_bk_size = GDMA.channel[cam->dma_num].in.conf1.in_ext_mem_bk_size;
 
     GDMA.channel[cam->dma_num].in.int_clr.val = ~0;
     GDMA.channel[cam->dma_num].in.int_ena.val = 0;
 
-    GDMA.channel[cam->dma_num].in.conf0.val = 0;
     GDMA.channel[cam->dma_num].in.conf0.in_rst = 1;
     GDMA.channel[cam->dma_num].in.conf0.in_rst = 0;
 
-    //internal SRAM only
-    if (!cam->dma_mode) {
-        GDMA.channel[cam->dma_num].in.conf0.indscr_burst_en = 1;
-        GDMA.channel[cam->dma_num].in.conf0.in_data_burst_en = 1;
-    }
-
+    GDMA.channel[cam->dma_num].in.conf0.indscr_burst_en = desc_burst_en;
+    GDMA.channel[cam->dma_num].in.conf0.in_data_burst_en = data_burst_en;
+    GDMA.channel[cam->dma_num].in.conf1.in_ext_mem_bk_size = ext_mem_bk_size;
     GDMA.channel[cam->dma_num].in.conf1.in_check_owner = 1;
     //GDMA.channel[cam->dma_num].in.pri.rx_pri = 1;//rx prio 0-15
     //GDMA.channel[cam->dma_num].in.sram_size.in_size = 6;//This register is used to configure the size of L2 Tx FIFO for Rx channel. 0:16 bytes, 1:24 bytes, 2:32 bytes, 3: 40 bytes, 4: 48 bytes, 5:56 bytes, 6: 64 bytes, 7: 72 bytes, 8: 80 bytes.
