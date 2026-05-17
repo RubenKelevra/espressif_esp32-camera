@@ -735,7 +735,21 @@ static esp_err_t cam_dma_config(const camera_config_t *config)
         }
     }
 
-    /* Allocate memory for frame buffer */
+    /* Allocate memory for frame buffer.  DMA-mode frame buffers are read by
+     * the CPU after external-memory DMA writes, so align the allocation to at
+     * least the data-cache line size.  This keeps cache invalidation from
+     * sharing the first line of the framebuffer with unrelated heap data. */
+    size_t fb_align = 16;
+    if (cam_obj->dma_mode) {
+        fb_align = esp_camera_dcache_line_size();
+        if (fb_align == 0) {
+            fb_align = 32;
+        }
+        if (fb_align < dma_align) {
+            fb_align = dma_align;
+        }
+    }
+
     size_t alloc_size = fb_size * sizeof(uint8_t) + dma_align;
     uint32_t _caps = MALLOC_CAP_8BIT;
     if (CAMERA_FB_IN_DRAM == config->fb_location) {
@@ -751,16 +765,16 @@ static esp_err_t cam_dma_config(const camera_config_t *config)
 #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(4, 3, 0)
         // In IDF v4.2 and earlier, memory returned by heap_caps_aligned_alloc must be freed using heap_caps_aligned_free.
         // And heap_caps_aligned_free is deprecated on v4.3.
-        cam_obj->frames[x].fb.buf = (uint8_t *)heap_caps_aligned_alloc(16, alloc_size, _caps);
+        cam_obj->frames[x].fb.buf = (uint8_t *)heap_caps_aligned_alloc(fb_align, alloc_size, _caps);
 #else
         cam_obj->frames[x].fb.buf = (uint8_t *)heap_caps_malloc(alloc_size, _caps);
 #endif
         CAM_CHECK(cam_obj->frames[x].fb.buf != NULL, "frame buffer malloc failed", ESP_FAIL);
         if (cam_obj->dma_mode) {
-            //align PSRAM buffer. TODO: save the offset so proper address can be freed later
-            cam_obj->frames[x].fb_offset = dma_align - ((uint32_t)cam_obj->frames[x].fb.buf & (dma_align - 1));
+            uintptr_t mis = (uintptr_t)cam_obj->frames[x].fb.buf & (dma_align - 1);
+            cam_obj->frames[x].fb_offset = (dma_align - mis) & (dma_align - 1);
             cam_obj->frames[x].fb.buf += cam_obj->frames[x].fb_offset;
-            ESP_LOGI(TAG, "Frame[%d]: Offset: %u, Addr: 0x%08X", x, cam_obj->frames[x].fb_offset, (unsigned) cam_obj->frames[x].fb.buf);
+            ESP_LOGI(TAG, "Frame[%d]: Offset: %u, Addr: 0x%08X", x, cam_obj->frames[x].fb_offset, (unsigned)cam_obj->frames[x].fb.buf);
             cam_obj->frames[x].dma = allocate_dma_descriptors(cam_obj->dma_node_cnt, cam_obj->dma_node_buffer_size, cam_obj->frames[x].fb.buf, !(cam_obj->jpeg_mode && cam_obj->dma_mode));
             CAM_CHECK(cam_obj->frames[x].dma != NULL, "frame dma malloc failed", ESP_FAIL);
         }
