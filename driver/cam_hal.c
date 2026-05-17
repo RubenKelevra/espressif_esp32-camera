@@ -123,13 +123,6 @@ static const uint8_t JPEG_SOI_MARKER[] = {0xFF, 0xD8, 0xFF}; /* SOI = FF D8 FF *
 static const uint8_t JPEG_EOI_BYTES[] = {0xFF, 0xD9};        /* EOI = FF D9 */
 #define JPEG_EOI_MARKER_LEN (2)
 
-/* Compute the scan window for JPEG EOI detection in PSRAM. */
-static inline size_t eoi_probe_window(size_t half, size_t frame_len)
-{
-    size_t w = half + (JPEG_EOI_MARKER_LEN - 1);
-    return w > frame_len ? frame_len : w;
-}
-
 static int cam_verify_jpeg_soi(const uint8_t *inbuf, uint32_t length)
 {
     static uint16_t warn_soi_miss_cnt = 0;
@@ -282,16 +275,18 @@ void IRAM_ATTR ll_cam_send_event(cam_obj_t *cam, cam_event_t cam_event, BaseType
 
 typedef struct {
     size_t len;
+    size_t eof_node_len;
     bool eof;
 } cam_dma_frame_len_t;
 
 static cam_dma_frame_len_t cam_dma_received_size(const lldesc_t *dma, uint32_t count)
 {
-    cam_dma_frame_len_t result = { 0, false };
+    cam_dma_frame_len_t result = { 0, 0, false };
 
     for (uint32_t i = 0; i < count; i++) {
         result.len += dma[i].length;
         if (dma[i].eof) {
+            result.eof_node_len = dma[i].length;
             result.eof = true;
             break;
         }
@@ -367,6 +362,44 @@ static bool cam_verify_dma_jpeg_start(camera_fb_t *frame_buffer_event)
     return false;
 }
 
+static bool cam_verify_dma_jpeg_end(camera_fb_t *frame, size_t eof_node_len)
+{
+    if (frame->len < JPEG_EOI_MARKER_LEN) {
+        return false;
+    }
+
+    size_t exact_eoi_pos = frame->len - JPEG_EOI_MARKER_LEN;
+    if (memcmp(frame->buf + exact_eoi_pos, JPEG_EOI_BYTES, JPEG_EOI_MARKER_LEN) == 0) {
+        return true;
+    }
+
+    /* The descriptor EOF length should normally make EOI the final two bytes.
+     * If it does not, fall back to the narrowest tail probe that can still
+     * catch an EOI split across the EOF descriptor boundary: the bytes written
+     * into the EOF descriptor plus one byte from the previous descriptor.
+     * Never read beyond the GDMA-reported frame length. */
+    size_t probe_len = eof_node_len + (JPEG_EOI_MARKER_LEN - 1);
+    if (probe_len > frame->len) {
+        probe_len = frame->len;
+    }
+
+    if (probe_len < JPEG_EOI_MARKER_LEN) {
+        return false;
+    }
+
+    uint8_t *probe_start = frame->buf + frame->len - probe_len;
+    int off = cam_verify_jpeg_eoi(probe_start, probe_len, true);
+    if (off < 0) {
+        return false;
+    }
+
+    size_t recovered_len = frame->len - probe_len + off + JPEG_EOI_MARKER_LEN;
+    ESP_LOGW(TAG, "JPEG DMA EOI not at reported tail: len=%u recovered=%u eof_node=%u",
+             (unsigned)frame->len, (unsigned)recovered_len, (unsigned)eof_node_len);
+    frame->len = recovered_len;
+    return true;
+}
+
 static bool cam_finish_dma_jpeg_frame(int frame_pos)
 {
     camera_fb_t *frame = &cam_obj->frames[frame_pos].fb;
@@ -392,6 +425,13 @@ static bool cam_finish_dma_jpeg_frame(int frame_pos)
     cam_drop_psram_cache(frame->buf, frame->len);
 
     if (!cam_verify_dma_jpeg_start(frame)) {
+        cam_obj->frames[frame_pos].en = 1;
+        return false;
+    }
+
+    if (!cam_verify_dma_jpeg_end(frame, dma_len.eof_node_len)) {
+        static uint16_t warn_dma_eoi_cnt = 0;
+        CAM_WARN_THROTTLE(warn_dma_eoi_cnt, "NO-EOI - JPEG end marker missing (DMA)");
         cam_obj->frames[frame_pos].en = 1;
         return false;
     }
@@ -975,20 +1015,9 @@ camera_fb_t *cam_take(TickType_t timeout)
             /* find the end marker for JPEG. Data after that can be discarded */
             int offset_e = -1;
             if (cam_obj->dma_mode) {
-                /* Search forward from (JPEG_EOI_MARKER_LEN - 1) bytes before the final
-                 * DMA block. We prefer forward search to pick the earliest EOI in the
-                 * last DMA node, avoiding stale markers from a larger prior frame. */
-                size_t probe_len = eoi_probe_window(cam_obj->dma_node_buffer_size,
-                                                   dma_buffer->len);
-                if (probe_len < JPEG_EOI_MARKER_LEN) {
-                    goto skip_eoi_check;
-                }
-                uint8_t *probe_start = dma_buffer->buf + dma_buffer->len - probe_len;
-                cam_drop_psram_cache(probe_start, probe_len);
-                int off = cam_verify_jpeg_eoi(probe_start, probe_len, true);
-                if (off >= 0) {
-                    offset_e = dma_buffer->len - probe_len + off;
-                }
+                /* DMA-mode JPEGs are SOI/EOI validated and, if needed, trimmed
+                 * before entering the frame queue. */
+                return dma_buffer;
             } else {
                 offset_e = cam_verify_jpeg_eoi(dma_buffer->buf, dma_buffer->len, false);
             }
