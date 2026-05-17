@@ -123,24 +123,34 @@ static const uint8_t JPEG_SOI_MARKER[] = {0xFF, 0xD8, 0xFF}; /* SOI = FF D8 FF *
 static const uint8_t JPEG_EOI_BYTES[] = {0xFF, 0xD9};        /* EOI = FF D9 */
 #define JPEG_EOI_MARKER_LEN (2)
 
-static int cam_verify_jpeg_soi(const uint8_t *inbuf, uint32_t length)
+static int cam_find_jpeg_soi(const uint8_t *inbuf, uint32_t length)
 {
-    static uint16_t warn_soi_miss_cnt = 0;
     if (length < JPEG_SOI_MARKER_LEN) {
-        CAM_WARN_THROTTLE(warn_soi_miss_cnt,
-                          "NO-SOI - JPEG start marker missing (len < 3b)");
         return -1;
     }
 
     for (uint32_t i = 0; i <= length - JPEG_SOI_MARKER_LEN; i++) {
         if (memcmp(&inbuf[i], JPEG_SOI_MARKER, JPEG_SOI_MARKER_LEN) == 0) {
-            //ESP_LOGW(TAG, "SOI: %d", (int) i);
             return i;
         }
     }
 
+    return -1;
+}
+
+static int cam_verify_jpeg_soi(const uint8_t *inbuf, uint32_t length)
+{
+    static uint16_t warn_soi_miss_cnt = 0;
+
+    int soi_off = cam_find_jpeg_soi(inbuf, length);
+    if (soi_off >= 0) {
+        return soi_off;
+    }
+
     CAM_WARN_THROTTLE(warn_soi_miss_cnt,
-                      "NO-SOI - JPEG start marker missing");
+                      length < JPEG_SOI_MARKER_LEN
+                          ? "NO-SOI - JPEG start marker missing (len < 3b)"
+                          : "NO-SOI - JPEG start marker missing");
     return -1;
 }
 
@@ -350,15 +360,17 @@ static bool cam_verify_dma_jpeg_start(camera_fb_t *frame_buffer_event)
     uint8_t soi_probe[CAM_SOI_PROBE_BYTES];
     memcpy(soi_probe, frame_buffer_event->buf, probe_len);
 
-    int soi_off = cam_verify_jpeg_soi(soi_probe, probe_len);
+    int soi_off = cam_find_jpeg_soi(soi_probe, probe_len);
     if (soi_off == 0) {
         return true;
     }
 
-    static uint16_t warn_dma_soi_cnt = 0;
-    CAM_WARN_THROTTLE(warn_dma_soi_cnt,
-                      soi_off > 0 ? "NO-SOI - JPEG start marker not at pos 0 (DMA)"
-                                  : "NO-SOI - JPEG start marker missing (DMA)");
+    if (soi_off > 0) {
+        ESP_LOGW(TAG, "JPEG DMA reject: SOI not at offset 0, off=%d probe=%u",
+                 soi_off, (unsigned)probe_len);
+    } else {
+        ESP_LOGW(TAG, "JPEG DMA reject: SOI missing, probe=%u", (unsigned)probe_len);
+    }
     return false;
 }
 
@@ -409,14 +421,14 @@ static bool cam_finish_dma_jpeg_frame(int frame_pos)
     ll_cam_stop(cam_obj);
 
     if (!dma_len.eof) {
-        ESP_CAMERA_ETS_PRINTF(DRAM_STR("cam_hal: DMA frame missing EOF descriptor\r\n"));
+        ESP_LOGW(TAG, "JPEG DMA reject: missing EOF descriptor");
         cam_obj->frames[frame_pos].en = 1;
         return false;
     }
 
     if (dma_len.len == 0 || dma_len.len > cam_obj->fb_size) {
-        ESP_CAMERA_ETS_PRINTF(DRAM_STR("cam_hal: DMA frame length invalid: %u\r\n"),
-                              (unsigned)dma_len.len);
+        ESP_LOGW(TAG, "JPEG DMA reject: invalid length len=%u fb=%u",
+                 (unsigned)dma_len.len, (unsigned)cam_obj->fb_size);
         cam_obj->frames[frame_pos].en = 1;
         return false;
     }
@@ -430,8 +442,8 @@ static bool cam_finish_dma_jpeg_frame(int frame_pos)
     }
 
     if (!cam_verify_dma_jpeg_end(frame, dma_len.eof_node_len)) {
-        static uint16_t warn_dma_eoi_cnt = 0;
-        CAM_WARN_THROTTLE(warn_dma_eoi_cnt, "NO-EOI - JPEG end marker missing (DMA)");
+        ESP_LOGW(TAG, "JPEG DMA reject: EOI missing len=%u eof_node=%u",
+                 (unsigned)frame->len, (unsigned)dma_len.eof_node_len);
         cam_obj->frames[frame_pos].en = 1;
         return false;
     }
@@ -441,7 +453,7 @@ static bool cam_finish_dma_jpeg_frame(int frame_pos)
 
 static void cam_abort_dma_frame(int frame_pos, const char *reason)
 {
-    ESP_CAMERA_ETS_PRINTF(DRAM_STR("cam_hal: %s\r\n"), reason);
+    ESP_LOGW(TAG, "JPEG DMA abort: %s", reason);
     ll_cam_stop(cam_obj);
     cam_obj->frames[frame_pos].en = 1;
 }
