@@ -414,7 +414,7 @@ esp_err_t ll_cam_config(cam_obj_t *cam, const camera_config_t *config)
     LCD_CAM.cam_ctrl.cam_clkm_div_num = 160000000 / config->xclk_freq_hz;
     LCD_CAM.cam_ctrl.cam_clk_sel = 3;//Select Camera module source clock. 0: no clock. 1: APLL. 2: CLK160. 3: no clock.
 
-    LCD_CAM.cam_ctrl.cam_stop_en = 0;
+    LCD_CAM.cam_ctrl.cam_stop_en = 1;
     LCD_CAM.cam_ctrl.cam_vsync_filter_thres = 4; // Filter by LCD_CAM clock
     LCD_CAM.cam_ctrl.cam_update = 0;
     LCD_CAM.cam_ctrl.cam_byte_order = cam->swap_data;
