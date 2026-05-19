@@ -193,6 +193,7 @@ bool IRAM_ATTR ll_cam_stop(cam_obj_t *cam)
     GDMA.channel[cam->dma_num].in.int_clr.in_dscr_empty = 1;
     GDMA.channel[cam->dma_num].in.int_clr.dma_infifo_full_wm = 1;
     LCD_CAM.cam_ctrl1.cam_start = 0;
+    LCD_CAM.cam_ctrl.cam_stop_en = 0;
     GDMA.channel[cam->dma_num].in.link.stop = 1;
     return true;
 }
@@ -238,6 +239,7 @@ bool ll_cam_start(cam_obj_t *cam, int frame_pos)
     GDMA.channel[cam->dma_num].in.conf0.in_rst = 0;
 
     if (cam->jpeg_mode && cam->dma_mode) {
+        LCD_CAM.cam_ctrl.cam_stop_en = 1;
         /* Keep VSYNC EOF disabled while cam_start_frame() emits the synthetic
          * VSYNC priming pulse.  The pulse is needed to arm the LCD_CAM capture
          * path, but it must not complete the just-started GDMA transaction. */
@@ -460,7 +462,11 @@ esp_err_t ll_cam_config(cam_obj_t *cam, const camera_config_t *config)
     LCD_CAM.cam_ctrl.cam_clkm_div_num = 160000000 / config->xclk_freq_hz;
     LCD_CAM.cam_ctrl.cam_clk_sel = 3;//Select Camera module source clock. 0: no clock. 1: APLL. 2: CLK160. 3: no clock.
 
-    LCD_CAM.cam_ctrl.cam_stop_en = 1;
+    /* Do not enable CAM_STOP_EN during idle/bootstrap.  ll_cam_config()
+     * leaves cam_start asserted so VSYNC can bootstrap cam_task; enabling
+     * stop-on-GDMA-full here can stop LCD_CAM before a real descriptor list is
+     * armed.  Enable it only for active JPEG DMA captures in ll_cam_start(). */
+    LCD_CAM.cam_ctrl.cam_stop_en = 0;
     LCD_CAM.cam_ctrl.cam_vsync_filter_thres = 4; // Filter by LCD_CAM clock
     LCD_CAM.cam_ctrl.cam_update = 0;
     LCD_CAM.cam_ctrl.cam_byte_order = cam->swap_data;
