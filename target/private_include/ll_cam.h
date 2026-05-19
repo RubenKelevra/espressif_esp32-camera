@@ -79,6 +79,7 @@ typedef enum {
     CAM_IN_SUC_EOF_EVENT = 0,
     CAM_VSYNC_EVENT,
     CAM_DMA_ERROR_EVENT,
+    CAM_DMA_FIFO_FULL_EVENT,
     CAM_FRAME_RETURNED_EVENT,
 } cam_event_t;
 

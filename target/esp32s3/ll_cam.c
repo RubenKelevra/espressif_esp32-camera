@@ -133,6 +133,9 @@ static void CAMERA_ISR_IRAM_ATTR ll_cam_dma_isr(void *arg)
 
     GDMA.channel[cam->dma_num].in.int_clr.val = status.val;
 
+    if (status.infifo_full_wm) {
+        ll_cam_send_event(cam, CAM_DMA_FIFO_FULL_EVENT, &HPTaskAwoken);
+    }
     if (status.in_dscr_err || status.in_dscr_empty) {
         ll_cam_send_event(cam, CAM_DMA_ERROR_EVENT, &HPTaskAwoken);
     }
@@ -150,9 +153,11 @@ bool IRAM_ATTR ll_cam_stop(cam_obj_t *cam)
     GDMA.channel[cam->dma_num].in.int_ena.in_suc_eof = 0;
     GDMA.channel[cam->dma_num].in.int_ena.in_dscr_err = 0;
     GDMA.channel[cam->dma_num].in.int_ena.in_dscr_empty = 0;
+    GDMA.channel[cam->dma_num].in.int_ena.infifo_full_wm = 0;
     GDMA.channel[cam->dma_num].in.int_clr.in_suc_eof = 1;
     GDMA.channel[cam->dma_num].in.int_clr.in_dscr_err = 1;
     GDMA.channel[cam->dma_num].in.int_clr.in_dscr_empty = 1;
+    GDMA.channel[cam->dma_num].in.int_clr.dma_infifo_full_wm = 1;
     LCD_CAM.cam_ctrl1.cam_start = 0;
     GDMA.channel[cam->dma_num].in.link.stop = 1;
     return true;
@@ -175,13 +180,20 @@ bool ll_cam_start(cam_obj_t *cam, int frame_pos)
     GDMA.channel[cam->dma_num].in.int_clr.in_suc_eof = 1;
     GDMA.channel[cam->dma_num].in.int_clr.in_dscr_err = 1;
     GDMA.channel[cam->dma_num].in.int_clr.in_dscr_empty = 1;
+    GDMA.channel[cam->dma_num].in.int_clr.dma_infifo_full_wm = 1;
     GDMA.channel[cam->dma_num].in.int_ena.in_suc_eof = 1;
     if (cam->jpeg_mode && cam->dma_mode) {
+        /* TRM reset value is 0x0c. Enable this interrupt with CAM_STOP_EN to
+         * observe and recover from GDMA RX FIFO pressure instead of waiting
+         * forever for a VSYNC EOF that cannot arrive after the camera stops. */
+        GDMA.channel[cam->dma_num].in.conf1.dma_infifo_full_thrs = 0x0c;
         GDMA.channel[cam->dma_num].in.int_ena.in_dscr_err = 1;
         GDMA.channel[cam->dma_num].in.int_ena.in_dscr_empty = 1;
+        GDMA.channel[cam->dma_num].in.int_ena.infifo_full_wm = 1;
     } else {
         GDMA.channel[cam->dma_num].in.int_ena.in_dscr_err = 0;
         GDMA.channel[cam->dma_num].in.int_ena.in_dscr_empty = 0;
+        GDMA.channel[cam->dma_num].in.int_ena.infifo_full_wm = 0;
     }
 
     LCD_CAM.cam_ctrl1.cam_reset = 1;

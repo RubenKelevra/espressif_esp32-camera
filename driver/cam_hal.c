@@ -261,6 +261,9 @@ void IRAM_ATTR ll_cam_send_event(cam_obj_t *cam, cam_event_t cam_event, BaseType
         case CAM_DMA_ERROR_EVENT:
             CAM_WARN_THROTTLE(ovf_cnt, "EV-DMA-ERR-OVF");
             break;
+        case CAM_DMA_FIFO_FULL_EVENT:
+            CAM_WARN_THROTTLE(ovf_cnt, "EV-DMA-FIFO-OVF");
+            break;
         case CAM_FRAME_RETURNED_EVENT:
             CAM_WARN_THROTTLE(ovf_cnt, "EV-FB-RETURN-OVF");
             break;
@@ -466,7 +469,19 @@ static void cam_task_handle_dma_jpeg_event(cam_event_t cam_event, int *frame_pos
     if (cam_event == CAM_DMA_ERROR_EVENT) {
         dma_jpeg_error_events++;
         cam_abort_dma_frame(*frame_pos, "DMA descriptor error");
-        cam_obj->state = CAM_STATE_IDLE;
+        cam_start_next_or_idle(frame_pos);
+        return;
+    }
+
+    if (cam_event == CAM_DMA_FIFO_FULL_EVENT) {
+        dma_jpeg_error_events++;
+        ESP_LOGW(TAG, "JPEG DMA FIFO full watermark: frame=%d, vsync=%u, eof=%u, err=%u",
+                 *frame_pos, (unsigned)dma_jpeg_vsync_events,
+                 (unsigned)dma_jpeg_eof_events,
+                 (unsigned)dma_jpeg_error_events);
+        ll_cam_dma_print_state(cam_obj);
+        cam_abort_dma_frame(*frame_pos, "DMA FIFO full");
+        cam_start_next_or_idle(frame_pos);
         return;
     }
 
