@@ -70,6 +70,48 @@ void ll_cam_dma_print_state(cam_obj_t *cam)
     esp_rom_printf("  in_state             : %lu\n", GDMA.channel[cam->dma_num].in.state.in_state);
 }
 
+
+void ll_cam_dma_print_compact_state(cam_obj_t *cam, const char *reason)
+{
+    esp_rom_printf("dma_jpeg_state[%s,%u]: raw=0x%lx st=0x%lx ena=0x%lx done=%lu eof=%lu dscr_err=%lu dscr_empty=%lu full_wm=%lu ovf_l1=%lu ovf_l3=%lu start=%lu vs_eof=%lu dscr=0x%lx dscr_state=%lu in_state=%lu\n",
+                   reason,
+                   cam->dma_num,
+                   GDMA.channel[cam->dma_num].in.int_raw.val,
+                   GDMA.channel[cam->dma_num].in.int_st.val,
+                   GDMA.channel[cam->dma_num].in.int_ena.val,
+                   GDMA.channel[cam->dma_num].in.int_raw.in_done,
+                   GDMA.channel[cam->dma_num].in.int_raw.in_suc_eof,
+                   GDMA.channel[cam->dma_num].in.int_raw.in_dscr_err,
+                   GDMA.channel[cam->dma_num].in.int_raw.in_dscr_empty,
+                   GDMA.channel[cam->dma_num].in.int_raw.infifo_full_wm,
+                   GDMA.channel[cam->dma_num].in.int_raw.infifo_ovf_l1,
+                   GDMA.channel[cam->dma_num].in.int_raw.infifo_ovf_l3,
+                   LCD_CAM.cam_ctrl1.cam_start,
+                   LCD_CAM.cam_ctrl.cam_vs_eof_en,
+                   GDMA.channel[cam->dma_num].in.state.dscr_addr,
+                   GDMA.channel[cam->dma_num].in.state.in_dscr_state,
+                   GDMA.channel[cam->dma_num].in.state.in_state);
+    esp_rom_printf("dma_jpeg_fifo[%s,%u]: full_l1=%lu cnt_l1=%lu full_l2=%lu cnt_l2=%lu full_l3=%lu cnt_l3=%lu empty_l1=%lu empty_l2=%lu empty_l3=%lu hungry=%lu\n",
+                   reason,
+                   cam->dma_num,
+                   GDMA.channel[cam->dma_num].in.infifo_status.infifo_full_l1,
+                   GDMA.channel[cam->dma_num].in.infifo_status.infifo_cnt_l1,
+                   GDMA.channel[cam->dma_num].in.infifo_status.infifo_full_l2,
+                   GDMA.channel[cam->dma_num].in.infifo_status.infifo_cnt_l2,
+                   GDMA.channel[cam->dma_num].in.infifo_status.infifo_full_l3,
+                   GDMA.channel[cam->dma_num].in.infifo_status.infifo_cnt_l3,
+                   GDMA.channel[cam->dma_num].in.infifo_status.infifo_empty_l1,
+                   GDMA.channel[cam->dma_num].in.infifo_status.infifo_empty_l2,
+                   GDMA.channel[cam->dma_num].in.infifo_status.infifo_empty_l3,
+                   GDMA.channel[cam->dma_num].in.infifo_status.in_buf_hungry);
+}
+
+bool ll_cam_dma_fifo_overflow_latched(cam_obj_t *cam)
+{
+    return GDMA.channel[cam->dma_num].in.int_raw.infifo_ovf_l1 ||
+           GDMA.channel[cam->dma_num].in.int_raw.infifo_ovf_l3;
+}
+
 void ll_cam_dma_reset(cam_obj_t *cam)
 {
     /* gdma_config_transfer() configures descriptor burst, data burst, and the

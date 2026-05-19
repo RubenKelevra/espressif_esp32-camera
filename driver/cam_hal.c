@@ -455,6 +455,15 @@ static bool cam_finish_dma_jpeg_frame(int frame_pos)
     cam_dma_frame_len_t dma_len = cam_dma_received_size(cam_obj->frames[frame_pos].dma,
                                                         cam_obj->dma_node_cnt);
 
+    static uint8_t eof_trace_cnt = 0;
+    bool overflow_latched = ll_cam_dma_fifo_overflow_latched(cam_obj);
+    if (overflow_latched || eof_trace_cnt < 48) {
+        ll_cam_dma_print_compact_state(cam_obj, "jpeg-eof");
+        if (!overflow_latched) {
+            eof_trace_cnt++;
+        }
+    }
+
     ll_cam_stop(cam_obj);
 
     if (!dma_len.eof) {
