@@ -958,6 +958,12 @@ camera_fb_t *cam_take(TickType_t timeout)
 #if CONFIG_IDF_TARGET_ESP32S3
             /* Keep cam_take() lightweight; this runs in the framebuffer consumer
              * task, which may have a smaller stack than the camera task. */
+            if (cam_obj->dma_mode && cam_obj->jpeg_mode) {
+                static uint16_t timeout_dump_cnt = 0;
+                if ((timeout_dump_cnt++ & 0x03) == 0) {
+                    ll_cam_dma_print_timeout_state(cam_obj);
+                }
+            }
 #endif
             return NULL;
         }

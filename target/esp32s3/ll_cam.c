@@ -70,6 +70,40 @@ void ll_cam_dma_print_state(cam_obj_t *cam)
     esp_rom_printf("  in_state             : %lu\n", GDMA.channel[cam->dma_num].in.state.in_state);
 }
 
+
+void ll_cam_dma_print_timeout_state(cam_obj_t *cam)
+{
+    esp_rom_printf("cam_timeout_state[%u]: raw=0x%lx st=0x%lx ena=0x%lx clr=0x%lx start=%lu stop_en=%lu vs_eof=%lu link_start=%lu link_stop=%lu link_restart=%lu\n",
+                   cam->dma_num,
+                   GDMA.channel[cam->dma_num].in.int_raw.val,
+                   GDMA.channel[cam->dma_num].in.int_st.val,
+                   GDMA.channel[cam->dma_num].in.int_ena.val,
+                   GDMA.channel[cam->dma_num].in.int_clr.val,
+                   LCD_CAM.cam_ctrl1.cam_start,
+                   LCD_CAM.cam_ctrl.cam_stop_en,
+                   LCD_CAM.cam_ctrl.cam_vs_eof_en,
+                   GDMA.channel[cam->dma_num].in.link.start,
+                   GDMA.channel[cam->dma_num].in.link.stop,
+                   GDMA.channel[cam->dma_num].in.link.restart);
+    esp_rom_printf("cam_timeout_fifo[%u]: full_l1=%lu cnt_l1=%lu full_l2=%lu cnt_l2=%lu full_l3=%lu cnt_l3=%lu empty_l1=%lu empty_l2=%lu empty_l3=%lu\n",
+                   cam->dma_num,
+                   GDMA.channel[cam->dma_num].in.infifo_status.infifo_full_l1,
+                   GDMA.channel[cam->dma_num].in.infifo_status.infifo_cnt_l1,
+                   GDMA.channel[cam->dma_num].in.infifo_status.infifo_full_l2,
+                   GDMA.channel[cam->dma_num].in.infifo_status.infifo_cnt_l2,
+                   GDMA.channel[cam->dma_num].in.infifo_status.infifo_full_l3,
+                   GDMA.channel[cam->dma_num].in.infifo_status.infifo_cnt_l3,
+                   GDMA.channel[cam->dma_num].in.infifo_status.infifo_empty_l1,
+                   GDMA.channel[cam->dma_num].in.infifo_status.infifo_empty_l2,
+                   GDMA.channel[cam->dma_num].in.infifo_status.infifo_empty_l3);
+    esp_rom_printf("cam_timeout_dma[%u]: dscr=0x%lx dscr_state=%lu in_state=%lu infifo_thrs=%lu\n",
+                   cam->dma_num,
+                   GDMA.channel[cam->dma_num].in.state.dscr_addr,
+                   GDMA.channel[cam->dma_num].in.state.in_dscr_state,
+                   GDMA.channel[cam->dma_num].in.state.in_state,
+                   GDMA.channel[cam->dma_num].in.conf1.dma_infifo_full_thrs);
+}
+
 void ll_cam_dma_reset(cam_obj_t *cam)
 {
     /* gdma_config_transfer() configures descriptor burst, data burst, and the
