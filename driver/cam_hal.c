@@ -941,8 +941,15 @@ camera_fb_t *cam_take(TickType_t timeout)
         if (elapsed >= timeout) {
             ESP_LOGW(TAG, "Failed to get frame: timeout");
 #if CONFIG_IDF_TARGET_ESP32S3
-            /* Keep cam_take() lightweight; this runs in the framebuffer consumer
-             * task, which may have a smaller stack than the camera task. */
+            /* Poll raw hardware state without enabling extra GDMA interrupts.
+             * This keeps the capture path close to the quiet branch while still
+             * showing whether FIFO overflow or EOF bits are latched at timeout. */
+            if (cam_obj->dma_mode && cam_obj->jpeg_mode) {
+                static uint16_t timeout_dump_cnt = 0;
+                if ((timeout_dump_cnt++ & 0x07) == 0) {
+                    ll_cam_dma_print_timeout_state(cam_obj);
+                }
+            }
 #endif
             return NULL;
         }
