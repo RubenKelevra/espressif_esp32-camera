@@ -919,6 +919,17 @@ void cam_stop(void)
 void cam_start(void)
 {
     ll_cam_vsync_intr_enable(cam_obj, true);
+
+    /* Do not depend solely on a hardware VSYNC interrupt to bootstrap the
+     * first capture.  Some test runs end up with LCD_CAM.cam_start asserted
+     * from ll_cam_config(), but no real GDMA transaction armed because cam_task
+     * never receives the first VSYNC event.  CAM_STATE_IDLE already treats
+     * CAM_FRAME_RETURNED_EVENT as a safe software kick to try cam_start_frame().
+     */
+    if (cam_obj && cam_obj->event_queue) {
+        cam_event_t event = CAM_FRAME_RETURNED_EVENT;
+        (void)xQueueSend(cam_obj->event_queue, (void *)&event, 0);
+    }
 }
 
 camera_fb_t *cam_take(TickType_t timeout)
