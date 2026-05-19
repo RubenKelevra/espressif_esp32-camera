@@ -479,9 +479,9 @@ static void cam_task_handle_dma_jpeg_event(cam_event_t cam_event, int *frame_pos
                  *frame_pos, (unsigned)dma_jpeg_vsync_events,
                  (unsigned)dma_jpeg_eof_events,
                  (unsigned)dma_jpeg_error_events);
-        ll_cam_dma_print_state(cam_obj);
+        ll_cam_dma_print_timeout_state(cam_obj);
         cam_abort_dma_frame(*frame_pos, "DMA FIFO full");
-        cam_start_next_or_idle(frame_pos);
+        cam_obj->state = CAM_STATE_IDLE;
         return;
     }
 

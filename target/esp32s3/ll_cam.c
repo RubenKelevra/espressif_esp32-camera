@@ -168,6 +168,10 @@ static void CAMERA_ISR_IRAM_ATTR ll_cam_dma_isr(void *arg)
     GDMA.channel[cam->dma_num].in.int_clr.val = status.val;
 
     if (status.infifo_full_wm) {
+        /* Latch this as a diagnostic/recovery event, but do not leave the
+         * watermark interrupt enabled.  When the camera path is backpressured
+         * this condition can immediately reassert and storm the shared ISR. */
+        GDMA.channel[cam->dma_num].in.int_ena.infifo_full_wm = 0;
         ll_cam_send_event(cam, CAM_DMA_FIFO_FULL_EVENT, &HPTaskAwoken);
     }
     if (status.in_dscr_err || status.in_dscr_empty) {
