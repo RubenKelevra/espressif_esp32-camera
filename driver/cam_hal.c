@@ -207,6 +207,23 @@ static int cam_verify_jpeg_eoi(const uint8_t *inbuf, uint32_t length, bool searc
     return -1;
 }
 
+
+static const char *cam_event_name(cam_event_t event)
+{
+    switch (event) {
+    case CAM_IN_SUC_EOF_EVENT:
+        return "EOF";
+    case CAM_VSYNC_EVENT:
+        return "VSYNC";
+    case CAM_DMA_ERROR_EVENT:
+        return "DMA_ERROR";
+    case CAM_FRAME_RETURNED_EVENT:
+        return "FRAME_RETURNED";
+    default:
+        return "UNKNOWN";
+    }
+}
+
 static bool cam_get_next_frame(int * frame_pos)
 {
     if(!cam_obj->frames[*frame_pos].en){
@@ -224,20 +241,51 @@ static bool cam_get_next_frame(int * frame_pos)
 
 static bool cam_start_frame(int * frame_pos)
 {
-    if (cam_get_next_frame(frame_pos)) {
-        if(ll_cam_start(cam_obj, *frame_pos)){
-            /* LCD_CAM needs a synthetic VSYNC edge after starting a transaction.
-             * For JPEG DMA mode, ll_cam_start() temporarily keeps CAM_VS_EOF_EN
-             * disabled so this priming pulse cannot complete the frame. */
-            ll_cam_do_vsync(cam_obj);
-            if (cam_obj->dma_mode && cam_obj->jpeg_mode) {
-                ll_cam_set_vsync_eof(cam_obj, true);
-            }
-            uint64_t us = (uint64_t)esp_timer_get_time();
-            cam_obj->frames[*frame_pos].fb.timestamp.tv_sec = us / 1000000UL;
-            cam_obj->frames[*frame_pos].fb.timestamp.tv_usec = us % 1000000UL;
-            return true;
+    static uint8_t trace_cnt = 0;
+    bool have_frame = cam_get_next_frame(frame_pos);
+    if (!have_frame) {
+        if (trace_cnt < 16) {
+            ESP_LOGW(TAG, "bootstrap: no free frame slot, pos=%d", *frame_pos);
+            trace_cnt++;
         }
+        return false;
+    }
+
+    if (trace_cnt < 16) {
+        ESP_LOGW(TAG, "bootstrap: start frame slot=%d dma=%d jpeg=%d",
+                 *frame_pos, cam_obj->dma_mode, cam_obj->jpeg_mode);
+        trace_cnt++;
+    }
+
+    if (ll_cam_start(cam_obj, *frame_pos)) {
+        if (trace_cnt < 16) {
+            ESP_LOGW(TAG, "bootstrap: ll_cam_start ok slot=%d", *frame_pos);
+            trace_cnt++;
+        }
+        /* LCD_CAM needs a synthetic VSYNC edge after starting a transaction.
+         * For JPEG DMA mode, ll_cam_start() temporarily keeps CAM_VS_EOF_EN
+         * disabled so this priming pulse cannot complete the frame. */
+        ll_cam_do_vsync(cam_obj);
+        if (trace_cnt < 16) {
+            ESP_LOGW(TAG, "bootstrap: synthetic VSYNC sent slot=%d", *frame_pos);
+            trace_cnt++;
+        }
+        if (cam_obj->dma_mode && cam_obj->jpeg_mode) {
+            ll_cam_set_vsync_eof(cam_obj, true);
+            if (trace_cnt < 16) {
+                ESP_LOGW(TAG, "bootstrap: VSYNC EOF enabled slot=%d", *frame_pos);
+                trace_cnt++;
+            }
+        }
+        uint64_t us = (uint64_t)esp_timer_get_time();
+        cam_obj->frames[*frame_pos].fb.timestamp.tv_sec = us / 1000000UL;
+        cam_obj->frames[*frame_pos].fb.timestamp.tv_usec = us % 1000000UL;
+        return true;
+    }
+
+    if (trace_cnt < 16) {
+        ESP_LOGW(TAG, "bootstrap: ll_cam_start failed slot=%d", *frame_pos);
+        trace_cnt++;
     }
     return false;
 }
@@ -619,9 +667,20 @@ static void cam_task(void *arg)
         xQueueReceive(cam_obj->event_queue, (void *)&cam_event, portMAX_DELAY);
         DBG_PIN_SET(1);
 
+        static uint8_t task_trace_cnt = 0;
+        if (task_trace_cnt < 32) {
+            ESP_LOGW(TAG, "bootstrap: cam_task event=%s state=%d frame_pos=%d",
+                     cam_event_name(cam_event), cam_obj->state, frame_pos);
+            task_trace_cnt++;
+        }
+
         switch (cam_obj->state) {
         case CAM_STATE_IDLE:
             if (cam_event == CAM_VSYNC_EVENT || cam_event == CAM_FRAME_RETURNED_EVENT) {
+                if (task_trace_cnt < 32) {
+                    ESP_LOGW(TAG, "bootstrap: idle start attempt event=%s", cam_event_name(cam_event));
+                    task_trace_cnt++;
+                }
                 cam_start_next_or_idle(&frame_pos);
                 cnt = 0;
             }
@@ -928,7 +987,10 @@ void cam_start(void)
      */
     if (cam_obj && cam_obj->event_queue) {
         cam_event_t event = CAM_FRAME_RETURNED_EVENT;
-        (void)xQueueSend(cam_obj->event_queue, (void *)&event, 0);
+        BaseType_t ok = xQueueSend(cam_obj->event_queue, (void *)&event, 0);
+        ESP_LOGW(TAG, "bootstrap: cam_start software kick %s", ok == pdTRUE ? "queued" : "dropped");
+    } else {
+        ESP_LOGW(TAG, "bootstrap: cam_start no event queue");
     }
 }
 
